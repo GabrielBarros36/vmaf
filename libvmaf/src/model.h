@@ -74,6 +74,8 @@ typedef struct VmafModel {
         bool out_lte_in, out_gte_in;
     } score_transform;
     struct svm_model *svm;
+    struct svm_node *svm_nodes;  // cached for predict, allocated lazily
+    char **feature_names;        // cached for predict, allocated lazily
 } VmafModel;
 
 typedef struct VmafModelCollection {

@@ -237,97 +237,96 @@ int vmaf_predict_score_at_index(VmafModel *model,
 
     int err = 0;
 
-    struct svm_node *node = malloc(sizeof(*node) * (model->n_features + 1));
-    if (!node) return -ENOMEM;
+    // Lazily cache feature names (computed once, reused every frame)
+    if (!model->feature_names) {
+        model->feature_names = calloc(model->n_features, sizeof(char *));
+        if (!model->feature_names) return -ENOMEM;
+        for (unsigned i = 0; i < model->n_features; i++) {
+            VmafFeatureExtractor *fex =
+                vmaf_get_feature_extractor_by_feature_name(model->feature[i].name, 0);
+            if (!fex) { err = -EINVAL; goto fail_names; }
+
+            VmafDictionary *opts_dict = NULL;
+            if (model->feature[i].opts_dict) {
+                err = vmaf_dictionary_copy(&model->feature[i].opts_dict, &opts_dict);
+                if (err) goto fail_names;
+            }
+
+            VmafFeatureExtractorContext *fex_ctx;
+            err = vmaf_feature_extractor_context_create(&fex_ctx, fex, opts_dict);
+            if (err) {
+                vmaf_dictionary_free(&opts_dict);
+                goto fail_names;
+            }
+
+            model->feature_names[i] =
+                vmaf_feature_name_from_options(model->feature[i].name,
+                        fex_ctx->fex->options, fex_ctx->fex->priv);
+            vmaf_feature_extractor_context_destroy(fex_ctx);
+
+            if (!model->feature_names[i]) {
+                err = -ENOMEM;
+                goto fail_names;
+            }
+        }
+    }
+
+    // Lazily allocate svm_node array (reused every frame)
+    if (!model->svm_nodes) {
+        model->svm_nodes = malloc(sizeof(*model->svm_nodes) * (model->n_features + 1));
+        if (!model->svm_nodes) return -ENOMEM;
+    }
 
     for (unsigned i = 0; i < model->n_features; i++) {
-        VmafFeatureExtractor *fex =
-            vmaf_get_feature_extractor_by_feature_name(model->feature[i].name, 0);
-
-        if (!fex) {
-            vmaf_log(VMAF_LOG_LEVEL_ERROR,
-                     "vmaf_predict_score_at_index(): no feature extractor "
-                     "providing feature '%s'\n", model->feature[i].name);
-            err = -EINVAL;
-            goto free_node;
-        }
-
-        VmafDictionary *opts_dict = NULL;
-        if (model->feature[i].opts_dict) {
-            err = vmaf_dictionary_copy(&model->feature[i].opts_dict, &opts_dict);
-            if (err) return err;
-        }
-
-        VmafFeatureExtractorContext *fex_ctx;
-        err = vmaf_feature_extractor_context_create(&fex_ctx, fex, opts_dict);
+        double feature_score;
+        err = vmaf_feature_collector_get_score(feature_collector,
+                                               model->feature_names[i],
+                                               &feature_score, index);
         if (err) {
-            vmaf_log(VMAF_LOG_LEVEL_ERROR,
-                     "vmaf_predict_score_at_index(): could not generate "
-                     "feature extractor context\n");
-            vmaf_dictionary_free(&opts_dict);
+            if (!propagate_metadata) {
+                vmaf_log(VMAF_LOG_LEVEL_ERROR,
+                         "vmaf_predict_score_at_index(): no feature '%s' "
+                         "at index %d\n", model->feature_names[i], index);
+            }
             return err;
         }
 
-        char *feature_name =
-            vmaf_feature_name_from_options(model->feature[i].name,
-                    fex_ctx->fex->options, fex_ctx->fex->priv);
-
-        vmaf_feature_extractor_context_destroy(fex_ctx);
-
-        if (!feature_name) {
-            vmaf_log(VMAF_LOG_LEVEL_ERROR,
-                     "vmaf_predict_score_at_index(): could not generate "
-                     "feature name\n");
-            err = -ENOMEM;
-            goto free_node;
-        }
-
-        double feature_score;
-        err = vmaf_feature_collector_get_score(feature_collector,
-                                               feature_name, &feature_score,
-                                               index);
-
-        if (err) {
-            if (!propagate_metadata) {
-              vmaf_log(VMAF_LOG_LEVEL_ERROR,
-                       "vmaf_predict_score_at_index(): no feature '%s' "
-                       "at index %d\n", feature_name, index);
-            }
-            free(feature_name);
-            goto free_node;
-        }
-        free(feature_name);
-
         err = normalize(model, model->feature[i].slope,
                         model->feature[i].intercept, &feature_score);
-        if (err) goto free_node;
+        if (err) return err;
 
-        node[i].index = i + 1;
-        node[i].value = feature_score;
+        model->svm_nodes[i].index = i + 1;
+        model->svm_nodes[i].value = feature_score;
     }
-    node[model->n_features].index = -1;
+    model->svm_nodes[model->n_features].index = -1;
 
-    double prediction = svm_predict(model->svm, node);
+    double prediction = svm_predict(model->svm, model->svm_nodes);
 
     err = denormalize(model, &prediction);
-    if (err) goto free_node;
+    if (err) return err;
 
     err = transform(model, &prediction, flags);
-    if (err) goto free_node;
+    if (err) return err;
 
     err = clip(model, &prediction, flags);
-    if (err) goto free_node;
+    if (err) return err;
 
     if (write_prediction) {
         err = vmaf_feature_collector_append(feature_collector, model->name,
                                             prediction, index);
-        if (err) goto free_node;
+        if (err) return err;
     }
 
     *vmaf_score = prediction;
+    return 0;
 
-free_node:
-    free(node);
+fail_names:
+    if (model->feature_names) {
+        for (unsigned i = 0; i < model->n_features; i++)
+            free(model->feature_names[i]);
+        free(model->feature_names);
+        model->feature_names = NULL;
+    }
     return err;
 }
 
