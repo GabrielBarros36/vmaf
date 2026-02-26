@@ -120,8 +120,8 @@ static void subsample_rd_8(VifBuffer buf, unsigned w, unsigned h)
         for (unsigned j = 0; j < w; ++j) {
             uint32_t accum_ref = 0;
             uint32_t accum_dis = 0;
+            int ii = i - fwidth / 2;
             for (unsigned fi = 0; fi < fwidth; ++fi) {
-                int ii = i - fwidth / 2;
                 int ii_check = ii + fi;
                 const uint16_t fcoeff = vif_filt_s1[fi];
                 const uint8_t *ref = (uint8_t*)buf.ref;
@@ -174,8 +174,8 @@ static void subsample_rd_16(VifBuffer buf, unsigned w, unsigned h, int scale, in
         for (unsigned j = 0; j < w; ++j) {
             uint32_t accum_ref = 0;
             uint32_t accum_dis = 0;
+            int ii = i - fwidth / 2;
             for (unsigned fi = 0; fi < fwidth; ++fi) {
-                int ii = i - fwidth / 2;
                 int ii_check = ii + fi;
                 const uint16_t fcoeff = vif_filt[fi];
                 const ptrdiff_t stride = buf.stride / sizeof(uint16_t);
@@ -239,8 +239,8 @@ void vif_statistic_8(struct VifPublicState *s, float *num, float *den, unsigned 
             uint32_t accum_ref = 0;
             uint32_t accum_dis = 0;
             uint32_t accum_ref_dis = 0;
+            int ii = i - fwidth / 2;
             for (unsigned fi = 0; fi < fwidth; ++fi) {
-                int ii = i - fwidth / 2;
                 int ii_check = ii + fi;
                 const uint16_t fcoeff = vif_filt_s0[fi];
                 const uint8_t *ref = (uint8_t*)buf.ref;
@@ -381,8 +381,8 @@ void vif_statistic_16(struct VifPublicState *s, float *num, float *den, unsigned
             uint64_t accum_ref = 0;
             uint64_t accum_dis = 0;
             uint64_t accum_ref_dis = 0;
+            int ii = i - fwidth / 2;
             for (unsigned fi = 0; fi < fwidth; ++fi) {
-                int ii = i - fwidth / 2;
                 int ii_check = ii + fi;
                 const uint16_t fcoeff = vif_filt[fi];
                 const ptrdiff_t stride = buf.stride / sizeof(uint16_t);
