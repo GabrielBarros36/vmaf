@@ -80,16 +80,14 @@ pad_top_and_bottom(VifBuffer buf, unsigned h, int fwidth)
     const unsigned fwidth_half = fwidth / 2;
     unsigned char *ref = buf.ref;
     unsigned char *dis = buf.dis;
+    unsigned char *ref_bot = ref + buf.stride * (h - 1);
+    unsigned char *dis_bot = dis + buf.stride * (h - 1);
     for (unsigned i = 1; i <= fwidth_half; ++i) {
         size_t offset = buf.stride * i;
         memcpy(ref - offset, ref + offset, buf.stride);
         memcpy(dis - offset, dis + offset, buf.stride);
-        memcpy(ref + buf.stride * (h - 1) + buf.stride * i,
-               ref + buf.stride * (h - 1) - buf.stride * i,
-               buf.stride);
-        memcpy(dis + buf.stride * (h - 1) + buf.stride * i,
-               dis + buf.stride * (h - 1) - buf.stride * i,
-               buf.stride);
+        memcpy(ref_bot + offset, ref_bot - offset, buf.stride);
+        memcpy(dis_bot + offset, dis_bot - offset, buf.stride);
     }
 }
 
@@ -764,13 +762,20 @@ static int extract(VmafFeatureExtractor *fex,
     unsigned char *ref_out = s->public.buf.ref;
     unsigned char *dis_out = s->public.buf.dis;
 
-    for (unsigned i = 0; i < h; i++) {
-        memcpy(ref_out, ref_in, ref_pic->stride[0]);
-        memcpy(dis_out, dis_in, dist_pic->stride[0]);
-        ref_in += ref_pic->stride[0];
-        dis_in += dist_pic->stride[0];
-        ref_out += s->public.buf.stride;
-        dis_out += s->public.buf.stride;
+    if (ref_pic->stride[0] == s->public.buf.stride &&
+        dist_pic->stride[0] == s->public.buf.stride) {
+        const size_t frame_bytes = (size_t)s->public.buf.stride * h;
+        memcpy(ref_out, ref_in, frame_bytes);
+        memcpy(dis_out, dis_in, frame_bytes);
+    } else {
+        for (unsigned i = 0; i < h; i++) {
+            memcpy(ref_out, ref_in, ref_pic->stride[0]);
+            memcpy(dis_out, dis_in, dist_pic->stride[0]);
+            ref_in += ref_pic->stride[0];
+            dis_in += dist_pic->stride[0];
+            ref_out += s->public.buf.stride;
+            dis_out += s->public.buf.stride;
+        }
     }
     pad_top_and_bottom(s->public.buf, h, vif_filter1d_width[0]);
 
