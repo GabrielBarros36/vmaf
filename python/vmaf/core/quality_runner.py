@@ -234,13 +234,12 @@ class VmafLegacyQualityRunner(QualityRunner):
                                           self.FEATURE_RESCALE_DICT[scores_key])
             ordered_scaled_scores_list.append(scaled_scores)
 
-        scores = []
-        for score_vector in zip(*ordered_scaled_scores_list):
-            vif, adm, ansnr, motion = score_vector
-            xs = [[vif, adm, ansnr, motion]]
-            score = svmutil.svm_predict([0], xs, model)[0][0]
-            score = self._post_correction(motion, score)
-            scores.append(score)
+        all_xs = [list(sv) for sv in zip(*ordered_scaled_scores_list)]
+        all_labels = [0] * len(all_xs)
+        all_preds = svmutil.svm_predict(all_labels, all_xs, model)[0]
+        motion_scores = ordered_scaled_scores_list[3]
+        scores = [self._post_correction(motion, pred)
+                  for motion, pred in zip(motion_scores, all_preds)]
 
         result_dict = {}
         # add all feature result

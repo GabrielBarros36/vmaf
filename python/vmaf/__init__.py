@@ -189,7 +189,7 @@ class ExternalProgramCaller(object):
 
         if logger:
             logger.info(' '.join(cmd))
-        run_process(' '.join(cmd), shell=True)
+        run_process(cmd)
 
     @staticmethod
     def call_vifdiff_feature(yuv_type, ref_path, dis_path, w, h, log_file_path, logger=None):
