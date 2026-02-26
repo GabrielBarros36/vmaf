@@ -654,6 +654,627 @@ This applies only to `VmafLegacyQualityRunner` (the Python-side SVM path).
 
 ---
 
+## 7. Additional SIMD Gaps (Default Integer Path)
+
+### 7a. `integer_motion.c` — `y_convolution_8` / `y_convolution_16` Have No SIMD (Medium)
+
+**File:** `libvmaf/src/feature/integer_motion.c`
+**Lines:** 182–225 (`y_convolution_8`), 117–159 (`y_convolution_16`)
+
+The vertical Gaussian filter pass (`y_convolution`) is entirely scalar. For non-edge
+pixels (top_edge to bottom_edge), the inner loop applies a 5-tap vertical filter:
+
+```c
+for (unsigned i = top_edge; i < bottom_edge; i++) {
+    for (unsigned j = 0; j < width; ++j) {
+        uint32_t accum = 0;
+        for (int k = 0; k < filter_width; ++k) {
+            accum += filter[k] * (*src_p2);
+            src_p2 += src_stride;
+        }
+        dst[i * dst_stride + j] = (accum + add_before_shift) >> shift_var;
+    }
+}
+```
+
+The `x_convolution_16` function already has AVX2/AVX-512 implementations
+(`motion_avx2.c`, `motion_avx512.c`), but `y_convolution` has none. This is a 1D
+vertical Gaussian filter — horizontally adjacent output pixels are independent and
+can be computed 16 at a time with `_mm256_madd_epi16`.
+
+**Suggested fix:**
+Add `y_convolution_16_avx2` that processes 16 output pixels per iteration using
+vertical tap multiply-accumulate with AVX2. Dispatch via function pointer in `init()`.
+
+---
+
+### 7b. VIF AVX2 — Per-Element Scalar Processing After SIMD Blocks (High)
+
+**File:** `libvmaf/src/feature/x86/vif_avx2.c`
+**Lines:** 485–537 (inside `vif_statistic_8_avx2`)
+
+After computing 16 sigma values (xx, yy, xy) via AVX2, the code extracts them to
+stack arrays (lines 138–140) and processes them one-by-one in a scalar loop with
+branches (sigma_nsq threshold check + `log2` computation):
+
+```c
+// 16 sigma values computed via SIMD, then:
+for (int s_idx = 0; s_idx < 16; s_idx++) {
+    if (xx[s_idx] < sigma_nsq) { ... }
+    else { log2_32(...); ... }
+    num_log += ...;
+    den_log += ...;
+}
+```
+
+This defeats the SIMD parallelism for the most compute-intensive part of VIF
+scoring. The threshold check can use `_mm256_cmpgt_epi32` and the `log2`
+approximation can be vectorised with AVX2 bit-manipulation (CLZ via
+`_mm256_lzcnt_epi32` on AVX-512 or via float-cast trick on AVX2).
+
+**Suggested fix:**
+Vectorise the sigma threshold + log2 accumulation using AVX2 masked operations
+(`_mm256_blendv_epi8`). Accumulate `num_log` / `den_log` in SIMD registers and
+reduce horizontally at the end of each row.
+
+---
+
+### 7c. VIF AVX2 — Filter Coefficient Constants Reloaded Inside Inner Loop (Medium)
+
+**File:** `libvmaf/src/feature/x86/vif_avx2.c`
+**Lines:** 259, 293, 354, 823, 861, 925
+
+Filter coefficients are broadcast via `_mm256_set1_epi32(vif_filt_s0[fj])` inside
+the `fwidth/2` loop instead of being hoisted before the `j` loop:
+
+```c
+for (unsigned fj = 0; fj < fwidth_half; ++fj) {
+    __m256i fq = _mm256_set1_epi32(vif_filt_s0[fj]);  // reloaded every j-iter
+    ...
+}
+```
+
+The filter has at most 9 taps. Pre-loading all tap constants into registers before
+the loop eliminates redundant `_mm256_set1_epi32` broadcasts.
+
+**Suggested fix:**
+Pre-load `vif_filt_s0[0..fwidth_half-1]` into an array of `__m256i` registers
+before the `j` loop. Reference them by index inside the inner loop.
+
+---
+
+### 7d. VIF — Horizontal Pixel Padding Is Element-by-Element (Medium)
+
+**File:** `libvmaf/src/feature/integer_vif.h`
+**Lines:** 82–116 (`PADDING_SQ_DATA` and `PADDING_SQ_DATA_2`)
+
+The padding macros reflect border values one element at a time for 5 arrays
+(mu1, mu2, ref, dis, ref_dis):
+
+```c
+for (unsigned f = 1; f <= fwidth_half; ++f) {
+    buf.tmp.mu1[-f] = buf.tmp.mu1[f];
+    buf.tmp.mu2[-f] = buf.tmp.mu2[f];
+    buf.tmp.ref[-f] = buf.tmp.ref[f];
+    buf.tmp.dis[-f] = buf.tmp.dis[f];
+    buf.tmp.ref_dis[-f] = buf.tmp.ref_dis[f];
+    // ... right side similar
+}
+```
+
+Called once per output row per VIF scale. For fwidth_half=8, this is 80 individual
+32-bit copies per row. With AVX2 broadcast + store, the left/right padding zones
+(8 elements × 4 bytes = 32 bytes each) fit in a single 256-bit register.
+
+**Suggested fix:**
+Use `_mm256_set1_epi32(edge_value)` + `_mm256_storeu_si256` to fill each padding
+zone in one instruction per array.
+
+---
+
+### 7e. ADM — `adm_decouple` Angle Flag Uses Per-Pixel Float Division (High)
+
+**File:** `libvmaf/src/feature/integer_adm.c`
+**Lines:** 745–747 (`adm_decouple`), 882–884 (`adm_decouple_s123`)
+
+The per-pixel angle flag computation promotes int64 dot products to float and
+performs 4 float divisions:
+
+```c
+int angle_flag = (((float)ot_dp / 4096.0) >= 0.0f) &&
+    (((float)ot_dp / 4096.0) * ((float)ot_dp / 4096.0) >=
+        cos_1deg_sq * ((float)o_mag_sq / 4096.0) * ((float)t_mag_sq / 4096.0));
+```
+
+Since the divisor is a constant power-of-two (4096 = 2^12), these divisions are
+equivalent to right-shifts in fixed-point. The comparison `ot_dp² ≥ cos_1deg_sq ×
+o_mag_sq × t_mag_sq` can be done entirely in integer arithmetic (after scaling),
+eliminating all float conversion. With AVX2, 8 pixels can be evaluated in parallel
+using `_mm256_cmpgt_epi64`.
+
+**Note:** This is a sub-finding of 1c but provides a concrete vectorisation strategy
+for the angle flag, which is the most branch-heavy part of the inner loop.
+
+**Suggested fix:**
+Replace float comparison with fixed-point integer comparison. Vectorise with AVX2
+64-bit compare and blend.
+
+---
+
+### 7f. ADM — Scalar Clamps in `adm_decouple` Use Nested Ternaries (Medium)
+
+**File:** `libvmaf/src/feature/integer_adm.c`
+**Lines:** 760–762 (`adm_decouple`)
+
+Three values are clamped with nested ternary operators:
+
+```c
+int32_t kh = tmp_kh < 0 ? 0 : (tmp_kh > 32768 ? 32768 : tmp_kh);
+int32_t kv = tmp_kv < 0 ? 0 : (tmp_kv > 32768 ? 32768 : tmp_kv);
+int32_t kd = tmp_kd < 0 ? 0 : (tmp_kd > 32768 ? 32768 : tmp_kd);
+```
+
+AVX2 replaces each clamp with two instructions: `_mm256_max_epi32(x, zero)` +
+`_mm256_min_epi32(x, limit)`, processing 8 values per register with zero branches.
+
+**Note:** Sub-finding of 1c.
+
+---
+
+### 7g. ADM — `adm_csf` Triple-Angle Multiply-Shift-Store Loop Has No SIMD (Medium-High)
+
+**File:** `libvmaf/src/feature/integer_adm.c`
+**Lines:** 1025–1042 (`adm_csf`), 1097–1118 (`i4_adm_csf`)
+
+The CSF loop iterates over 3 angles × height × width, applying a per-pixel
+multiply, shift, abs, and second multiply:
+
+```c
+for (int theta = 0; theta < 3; ++theta) {
+    for (int i = top; i < bottom; ++i) {
+        for (int j = left; j < right; ++j) {
+            int32_t dst_val = i_rfactor[theta] * (int32_t)src_ptr[j];
+            int16_t i16_dst_val = (int16_t)((dst_val + add) >> shift);
+            dst_ptr[j] = i16_dst_val;
+            flt_ptr[j] = (int16_t)(((FIX_ONE_BY_30 * abs((int32_t)i16_dst_val)) + 2048) >> 12);
+        }
+    }
+}
+```
+
+This is a natural fit for AVX2: `_mm256_mullo_epi16` for the factor multiply,
+`_mm256_abs_epi16` + `_mm256_mullo_epi32` for the filtered output, processing
+16 int16 values per iteration.
+
+**Note:** Sub-finding of 1c.
+
+---
+
+### 7h. ADM — `adm_csf_den_scale` / `adm_csf_den_s123` Cubing Accumulation Has No SIMD (Medium)
+
+**File:** `libvmaf/src/feature/integer_adm.c`
+**Lines:** 1151–1185 (`adm_csf_den_scale`), 1207–1290 (`adm_csf_den_s123`)
+
+Accumulates cubes of absolute values for all band pixels:
+
+```c
+for (int j = left; j < right; ++j) {
+    uint16_t h = (uint16_t)abs(src_h[j]);
+    uint64_t val = ((uint64_t)h * h) * h;
+    accum_inner_h += val;
+}
+```
+
+AVX2 can compute `abs` with `_mm256_abs_epi16`, square with `_mm256_mullo_epi16` +
+widening, and accumulate the cube into 64-bit accumulators. The `s123` variant uses
+int32 data (8 values per register instead of 16).
+
+**Note:** Sub-finding of 1c.
+
+---
+
+### 7i. ADM — `adm_cm` Macro-Expanded Abs/Clamp/Cube Inner Loop Has No SIMD (High)
+
+**File:** `libvmaf/src/feature/integer_adm.c`
+**Lines:** 1376–1472 (center region of `adm_cm`)
+
+The `ADM_CM_ACCUM_ROUND` macro expands to per-pixel: abs → subtract threshold →
+clamp to zero → square → cube → accumulate:
+
+```c
+x = abs(x) - (thr << shift);
+x = x < 0 ? 0 : x;
+x_sq = (int32_t)((((int64_t)x * x) + add) >> shift);
+val = (((int64_t)x_sq * x) + add) >> shift;
+accum_inner += val;
+```
+
+The center region ("completely within frame", lines 1436–1472) is the dominant code
+path and has no boundary-condition branches. AVX2 can process 8 int32 values per
+iteration using `_mm256_abs_epi32`, `_mm256_sub_epi32`, `_mm256_max_epi32(x, 0)`,
+and widening multiplies.
+
+**Note:** Sub-finding of 1c. This is the most compute-intensive part of ADM.
+
+---
+
+## 8. Additional Memory / Allocation
+
+### 8a. Float Extractors — Per-Frame Buffer Allocations (Medium)
+
+**Files:**
+- `libvmaf/src/feature/adm.c` line 128 (20 buffers)
+- `libvmaf/src/feature/vif.c` line 129 (8 buffers)
+- `libvmaf/src/feature/ansnr.c` line 69 (2 buffers)
+- `libvmaf/src/feature/ms_ssim.c` line 105 (5 buffers per scale)
+
+All float feature extractors allocate large working buffers inside `compute_*()`
+on every frame and free them at the end. For a 1080p stream with all float
+extractors enabled, this is ~35 `aligned_malloc`/`free` pairs per frame.
+
+**Suggested fix:**
+Move buffer allocation to each extractor's `init()` callback and store in the
+extractor state struct. Free in `close()`.
+
+---
+
+### 8b. `picture.c` — Two Small `malloc` Calls Per Picture (Low)
+
+**File:** `libvmaf/src/picture.c`
+**Lines:** 50–57 (`vmaf_picture_priv_init`), 98–103 (`vmaf_picture_alloc`)
+
+Every picture allocation triggers two separate small heap allocations:
+- `VmafPicturePrivate` (~8 bytes)
+- `VmafRef` (~8 bytes, atomic counter)
+
+In the threaded path with `n_threads × n_features` concurrent pictures, this adds
+up. Both structs are tiny and could be embedded directly in `VmafPicture` or
+allocated as a single block with the pixel data.
+
+**Suggested fix:**
+Embed `VmafRef` directly in `VmafPicture`, or allocate priv + ref as one
+contiguous block.
+
+---
+
+### 8c. `picture_copy.c` — uint8/uint16 to Float Conversion Has No SIMD (Low-Medium)
+
+**File:** `libvmaf/src/feature/picture_copy.c`
+**Lines:** 56–62 (8-bit path)
+
+```c
+for (unsigned j = 0; j < src->w[0]; j++) {
+    float_data[j] = (float) data[j] + offset;
+}
+```
+
+Called by every float extractor at the start of each frame. At 1080p, this is
+2.07M scalar integer-to-float conversions. AVX2 can process 8 pixels per iteration
+with `_mm_loadu_si64` → `_mm256_cvtepu8_epi32` → `_mm256_cvtepi32_ps` →
+`_mm256_add_ps`.
+
+**Suggested fix:**
+Add AVX2 path for `picture_copy` with SIMD type conversion. Dispatch via CPU
+flag check.
+
+---
+
+## 9. Additional Algorithmic Redundancy
+
+### 9a. `psnr_hvs.c` — Constant Mask Table Recomputed Per Frame (Low)
+
+**File:** `libvmaf/src/feature/third_party/xiph/psnr_hvs.c`
+**Lines:** 236–239
+
+```c
+for (x = 0; x < 8; x++)
+    for (y = 0; y < 8; y++)
+        mask[x][y] = (_csf[x][y] * 0.3885746225901003) *
+                     (_csf[x][y] * 0.3885746225901003);
+```
+
+`_csf` is a compile-time constant array. The `mask` table is therefore constant
+and should be precomputed once (in `init()` or as a static const).
+
+**Suggested fix:**
+Replace with a `static const double mask[8][8] = { ... }` initialiser containing
+the precomputed values.
+
+---
+
+### 9b. CIEDE2000 — Per-Pixel Transcendental Functions in YUV→LAB Conversion (High if used)
+
+**File:** `libvmaf/src/feature/ciede.c`
+**Lines:** 273–308 (`get_lab_color`), 201–237 (`ciede2000`), 334–367 (main loop)
+
+The CIEDE2000 extractor performs two YUV→LAB conversions per pixel, each involving
+`pow()`, `sqrt()`, and the CIEDE2000 delta itself uses `pow()`, `sqrt()`, `sin()`,
+`cos()`, `atan2()`. At 1080p this is ~4M transcendental function calls per frame.
+
+```c
+for (unsigned i = 0; i < ref->h[0]; i++) {
+    for (unsigned j = 0; j < ref->w[0]; j++) {
+        const LABColor c1 = get_lab_color(r_y, r_u, r_v, bpc);  // pow, sqrt
+        const LABColor c2 = get_lab_color(d_y, d_u, d_v, bpc);  // pow, sqrt
+        de00_sum += ciede2000(c1, c2, ksub);                     // pow, sqrt, trig
+    }
+}
+```
+
+**Suggested fix:**
+Build a 256-entry (8-bit) or 1024-entry (10-bit) lookup table for the YUV→LAB
+conversion during `init()`. For CIEDE2000 delta, consider AVX2 vectorisation of
+the arithmetic using approximate SIMD transcendentals (e.g., fast `rsqrt` +
+Newton-Raphson refinement for `sqrt`, polynomial approximation for `atan2`).
+
+---
+
+### 9c. CIEDE2000 — Per-Frame YUV444 Buffer Allocation (Low)
+
+**File:** `libvmaf/src/feature/ciede.c`
+**Lines:** ~61–95
+
+When the input is YUV420 or YUV422, `ciede.c` allocates a full YUV444 upsampled
+buffer per frame. This should be pre-allocated in `init()` based on the known
+picture format and dimensions.
+
+---
+
+## 10. Secondary Extractor SIMD Gaps
+
+### 10a. `psnr_hvs.c` — Scalar 8×8 DCT (Medium-High if used)
+
+**File:** `libvmaf/src/feature/third_party/xiph/psnr_hvs.c`
+**Lines:** 155–163 (`od_bin_fdct8x8`), 241–332 (main block loop)
+
+PSNR-HVS processes the frame in non-overlapping 8×8 blocks. Each block undergoes
+a forward DCT via `od_bin_fdct8` (called 16 times: 8 rows + 8 columns). At 1080p
+with step=7, this is ~39k blocks × 16 = ~624k scalar DCT-8 transforms per frame.
+
+The DCT-8 is well-suited to AVX2: 8 butterfly stages can be computed using
+`_mm256_add_epi32` / `_mm256_sub_epi32` with register permutations.
+
+**Suggested fix:**
+Replace `od_bin_fdct8` with an AVX2 DCT-8 that processes all 8 rows (or columns)
+simultaneously. This reduces 8 scalar DCT calls to 1 SIMD call per direction.
+
+---
+
+### 10b. `psnr_hvs.c` — Scalar Error Weighting Loop (Low)
+
+**File:** `libvmaf/src/feature/third_party/xiph/psnr_hvs.c`
+**Lines:** 320–331
+
+Per-block error weighting iterates over 64 DCT coefficients with a branch per
+coefficient:
+
+```c
+for (i = 0; i < 8; i++) {
+    for (j = 0; j < 8; j++) {
+        err = abs(dct_s[i*8+j] - dct_d[i*8+j]);
+        if (i != 0 || j != 0)
+            err = err < s_mask / mask[i][j] ? 0 : err - s_mask / mask[i][j];
+        ret += (err * _csf[i][j]) * (err * _csf[i][j]);
+    }
+}
+```
+
+64 values fit in 8 AVX2 registers. The conditional can be replaced with
+`_mm256_max_ps(err - threshold, zero)` (branchless clamp).
+
+---
+
+### 10c. CAMBI — `filter_mode` (Mode-3 Median) Has No SIMD (Medium)
+
+**File:** `libvmaf/src/feature/cambi.c`
+**Lines:** 711–729
+
+Applies a 3-tap mode filter horizontally then vertically using a 3-line sliding
+window. Called once per scale (5 scales) on potentially large images:
+
+```c
+for (int j = 1; j < width - 1; j++) {
+    buffer[j] = mode3(data[j-1], data[j], data[j+1]);
+}
+```
+
+The `mode3` function (lines 705–709) uses two equality checks and a min-of-3
+fallback — a natural fit for branchless AVX2 using `_mm256_cmpeq_epi16` +
+`_mm256_blendv_epi8` + `_mm256_min_epi16`.
+
+**Suggested fix:**
+Vectorise `mode3` for 16 uint16 values per iteration. Use `cmpeq` masks to
+select matching values, fall through to `min3` via blend.
+
+---
+
+### 10d. CAMBI — `calculate_c_values_row` Per-Pixel Loop (Medium)
+
+**File:** `libvmaf/src/feature/cambi.c`
+**Lines:** 919–930
+
+The per-row C-value computation iterates pixel-by-pixel with a mask check:
+
+```c
+for (int col = 0; col < width; col++) {
+    if (mask[row * stride + col]) {
+        c_values[row * width + col] = c_value_pixel(...);
+    }
+}
+```
+
+The mask check is branch-per-pixel. AVX2 can load 16 mask values, compute a
+bitmask with `_mm256_movemask_epi8`, and skip fully-zero 16-pixel blocks. For
+blocks with mixed mask values, the inner `c_value_pixel` histogram queries can be
+partially vectorised with `_mm256_i32gather_epi32` for histogram lookups.
+
+---
+
+### 10e. CAMBI — `decimate` / `decimate_generic_*` Scalar Pixel Copy (Low-Medium)
+
+**File:** `libvmaf/src/feature/cambi.c`
+**Lines:** 464–586 (`decimate_generic_*`), 689–697 (`decimate`)
+
+The same-size path in `decimate_generic_uint16_and_convert_to_10b` (lines 560–564)
+is a simple left-shift loop:
+
+```c
+for (unsigned j = 0; j < out_w; j++) {
+    out_data[i * out_stride + j] = data[i * stride + j] << shift_factor;
+}
+```
+
+Straightforward to vectorise with `_mm256_slli_epi16`. The subsampled `decimate`
+function (lines 689–697) reads every 2nd row and column — harder to vectorise
+efficiently but could use shuffled loads.
+
+---
+
+### 10f. Float Extractors — All Have Zero SIMD (Medium overall)
+
+**Files:** `libvmaf/src/feature/float_adm.c`, `float_vif.c`, `float_psnr.c`,
+`float_ssim.c`, `float_ms_ssim.c`, `float_motion.c`, `float_ansnr.c`,
+`float_moment.c`
+
+None of the eight float feature extractors have any SIMD implementation. Their
+backing computation files (`adm.c`, `vif.c`, `psnr.c`, `ssim.c`, `ms_ssim.c`,
+`motion.c`, `ansnr.c`, `moment.c`) contain only scalar C loops. By contrast, their
+integer counterparts have AVX2/AVX-512 back-ends.
+
+The most impactful individual loops (if float extractors are enabled):
+
+| Extractor | Hot loop | AVX2 gain estimate |
+|-----------|----------|--------------------|
+| `float_psnr` (`psnr.c:42–51`) | SSE accumulation | 6–8× |
+| `float_motion` (`motion.c:44–60`) | SAD with `fabs()` | 7–8× |
+| `float_ssim` (`ssim.c` via `iqa/convolve.c`) | 11×11 Gaussian conv | 8–12× |
+| `float_ms_ssim` (`ms_ssim.c` via IQA) | 9×9 LPF + decimation | 6–8× |
+| `float_vif` (`vif.c:147–249`) | Multi-scale filter + stats | 6–8× |
+| `float_adm` (`adm.c:71–292`) | DWT + decouple + CSF | 6–8× |
+
+**Uncertainty note:** Float extractors are optional (`-Denable_float=true`) and not
+used in the default inference path. Impact is only relevant when explicitly enabled.
+
+---
+
+### 10g. IQA Library — Scalar 2D Convolution (Low)
+
+**File:** `libvmaf/src/feature/iqa/convolve.c`
+**Lines:** 90–200
+
+The IQA convolution library (used by `float_ssim` and `float_ms_ssim`) performs
+non-separable 2D convolution — it applies the full 2D kernel (11×11 = 121 MACs per
+pixel for SSIM, 9×9 = 81 for MS-SSIM) instead of separable 1D horizontal + 1D
+vertical passes. Separable filtering reduces 121 MACs to 22 (11+11).
+
+**Suggested fix:**
+Replace `_iqa_filter_pixel` with separable horizontal + vertical 1D passes. Use
+`_mm256_fmadd_ps` for the 1D filter taps. The integer VIF code already demonstrates
+this pattern via `common/convolution_avx.c`.
+
+---
+
+## 11. Python Orchestration (Additional)
+
+### 11a. `feature_extractor.py` — Triple-Nested Regex Loop in Log Parsing (Low)
+
+**File:** `python/vmaf/core/feature_extractor.py`
+**Lines:** 70–100
+
+Frame-by-frame log file parsing uses a triple-nested loop: for each line in the
+log file, for each atom feature, format and apply a regex. For N frames and M
+features, this is O(N×M) regex compilations.
+
+**Suggested fix:**
+Pre-compile all regex patterns once at class level. Better: parse each line once
+and extract all features in a single pass (e.g., a combined regex with named groups).
+
+---
+
+### 11b. `result_store.py` — `ast.literal_eval()` for Result Deserialization (Low)
+
+**File:** `python/vmaf/core/result_store.py`
+**Lines:** 78–85
+
+Results are serialised as Python `repr()` strings and deserialised with
+`ast.literal_eval()`. JSON parsing is 5–10× faster for structured data.
+
+**Suggested fix:**
+Switch to JSON serialisation (`json.dump` / `json.load`) for result storage.
+
+---
+
+### 11c. `quality_runner.py` — Model Loaded Twice Per Asset (Low)
+
+**File:** `python/vmaf/core/quality_runner.py`
+**Lines:** 284–293 (`_get_vmaf_feature_assembler_instance`), 472–473 (`_create_prediction_result_dict`)
+
+`VmafQualityRunner` calls `_load_model(asset)` twice per asset — once to set up
+the feature assembler and once to create the prediction result dict.
+
+**Suggested fix:**
+Cache the loaded model on the runner instance after the first load.
+
+---
+
+### 11d. `feature_assembler.py` — Exception-Based Wildcard Key Matching (Low)
+
+**File:** `python/vmaf/core/feature_assembler.py`
+**Lines:** 89–102
+
+Feature score lookup uses `try/except KeyError` with a regex-based wildcard
+fallback. For large feature sets with many mismatched keys, every miss triggers
+the expensive fallback.
+
+**Suggested fix:**
+Pre-build a feature key → scores_key mapping on first access. Use `dict.get()`
+instead of exception-based control flow.
+
+---
+
+## 12. Infrastructure
+
+### 12a. `feature_collector.c` — Metadata Callback Releases Lock Repeatedly (Low)
+
+**File:** `libvmaf/src/feature/feature_collector.c`
+**Lines:** 383–423
+
+On every feature score append with metadata callbacks registered, the code
+releases and re-acquires `feature_collector->lock` in an inner loop over models
+(lines 407, 410). This pattern causes lock thrashing and opens a race window.
+
+**Suggested fix:**
+Batch the prediction calls outside the lock, or defer metadata callbacks to a
+post-append phase.
+
+---
+
+### 12b. `framesync.c` — Linear Buffer Queue Traversal (Low)
+
+**File:** `libvmaf/src/framesync.c`
+**Lines:** 69–110
+
+Buffer acquire traverses the linked list from head on every call. For typical
+buffer counts (2–4) this is fast, but maintaining a free-list pointer would
+eliminate the traversal entirely.
+
+---
+
+### 12c. `libvmaf.c` — `validate_pic_params` Redundant After First Frame (Low)
+
+**File:** `libvmaf/src/libvmaf.c`
+**Lines:** 461–490
+
+Frame dimension and format validation runs on every `vmaf_read_pictures` call.
+After the first frame establishes `vmaf->pic_params`, subsequent checks are
+redundant (dimensions cannot change mid-stream).
+
+**Suggested fix:**
+Set a `pic_params_validated` flag after the first frame and skip full validation
+on subsequent frames.
+
+---
+
 ## Summary Table
 
 | # | Category | Finding | Impact | Uncertainty |
@@ -682,3 +1303,32 @@ This applies only to `VmafLegacyQualityRunner` (the Python-side SVM path).
 | 6a | Python | Each FeatureExtractor launches separate subprocess + re-reads YUV | High | Low |
 | 6b | Python | `shell=True` adds interpreter overhead per subprocess | Low | Low |
 | 6c | Python | Legacy SVM predict called frame-by-frame in Python | Low | Low |
+| 7a | SIMD gap | `y_convolution_8/16` in motion — no SIMD | Medium | Low |
+| 7b | SIMD gap | VIF AVX2 — per-element scalar after SIMD (sigma+log2) | High | Medium |
+| 7c | SIMD gap | VIF AVX2 — filter coefficients reloaded inside inner loop | Medium | Low |
+| 7d | SIMD gap | VIF horizontal pixel padding — element-by-element | Medium | Low |
+| 7e | SIMD gap | ADM `adm_decouple` angle flag float division per pixel | High | Low |
+| 7f | SIMD gap | ADM `adm_decouple` nested ternary clamps | Medium | Low |
+| 7g | SIMD gap | ADM `adm_csf` triple-angle multiply-shift-store loop | Medium-High | Low |
+| 7h | SIMD gap | ADM `adm_csf_den` cubing accumulation loop | Medium | Low |
+| 7i | SIMD gap | ADM `adm_cm` abs/clamp/cube inner loop | High | Medium |
+| 8a | Memory | Float extractors — 35+ per-frame buffer allocations | Medium | Low |
+| 8b | Memory | `picture.c` — two small mallocs per picture | Low | Low |
+| 8c | Memory | `picture_copy.c` — uint8/16→float with no SIMD | Low-Medium | Low |
+| 9a | Algorithmic | `psnr_hvs.c` — constant mask table recomputed per frame | Low | Low |
+| 9b | Algorithmic | CIEDE2000 — per-pixel transcendental funcs in YUV→LAB | High | Low |
+| 9c | Algorithmic | CIEDE2000 — per-frame YUV444 buffer allocation | Low | Low |
+| 10a | SIMD gap | `psnr_hvs.c` — scalar 8×8 DCT (~624k transforms/frame) | Medium-High | Low |
+| 10b | SIMD gap | `psnr_hvs.c` — scalar error weighting (64 coeffs/block) | Low | Low |
+| 10c | SIMD gap | CAMBI `filter_mode` — mode-3 median no SIMD | Medium | Low |
+| 10d | SIMD gap | CAMBI `calculate_c_values_row` — per-pixel with mask branch | Medium | Medium |
+| 10e | SIMD gap | CAMBI `decimate` / `decimate_generic` — scalar copy/shift | Low-Medium | Low |
+| 10f | SIMD gap | All 8 float extractors — zero SIMD coverage | Medium | Low |
+| 10g | SIMD gap | IQA library — non-separable 2D convolution | Low | Low |
+| 11a | Python | Triple-nested regex loop in log parsing | Low | Low |
+| 11b | Python | `ast.literal_eval()` for result deserialization | Low | Low |
+| 11c | Python | Model loaded twice per asset in QualityRunner | Low | Low |
+| 11d | Python | Exception-based wildcard key matching in assembler | Low | Low |
+| 12a | Infra | Feature collector metadata callback lock thrashing | Low | Medium |
+| 12b | Infra | Framesync buffer queue linear traversal | Low | Low |
+| 12c | Infra | `validate_pic_params` redundant after first frame | Low | Low |
