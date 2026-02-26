@@ -49,6 +49,13 @@ typedef struct VmafPredictModel {
     struct VmafPredictModel *next;
 } VmafPredictModel;
 
+#define FC_HASH_SIZE 64
+
+typedef struct {
+    const char *key;   /* points into FeatureVector.name — not separately allocated */
+    FeatureVector *fv;
+} FcHashEntry;
+
 typedef struct VmafFeatureCollector {
     FeatureVector **feature_vector;
     AggregateVector aggregate_vector;
@@ -57,6 +64,7 @@ typedef struct VmafFeatureCollector {
     unsigned cnt, capacity;
     struct { clock_t begin, end; } timer;
     pthread_mutex_t lock;
+    FcHashEntry fv_hash[FC_HASH_SIZE]; /* open-addressing hash for name→fv */
 } VmafFeatureCollector;
 
 int vmaf_feature_collector_init(VmafFeatureCollector **const feature_collector);

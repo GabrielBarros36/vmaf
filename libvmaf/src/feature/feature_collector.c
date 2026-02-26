@@ -290,18 +290,49 @@ int vmaf_feature_collector_register_metadata(VmafFeatureCollector *feature_colle
     return 0;
 }
 
+static unsigned fc_hash(const char *key)
+{
+    unsigned h = 5381;
+    while (*key)
+        h = ((h << 5) + h) ^ (unsigned char)*key++;
+    return h & (FC_HASH_SIZE - 1);
+}
+
+static FeatureVector *fc_hash_lookup(const FcHashEntry *table,
+                                     const char *key)
+{
+    unsigned idx = fc_hash(key);
+    for (unsigned i = 0; i < FC_HASH_SIZE; i++) {
+        unsigned slot = (idx + i) & (FC_HASH_SIZE - 1);
+        if (!table[slot].key)
+            return NULL;
+        if (!strcmp(table[slot].key, key))
+            return table[slot].fv;
+    }
+    return NULL;
+}
+
+static int fc_hash_insert(FcHashEntry *table, const char *key,
+                           FeatureVector *fv)
+{
+    unsigned idx = fc_hash(key);
+    for (unsigned i = 0; i < FC_HASH_SIZE; i++) {
+        unsigned slot = (idx + i) & (FC_HASH_SIZE - 1);
+        if (!table[slot].key) {
+            table[slot].key = key;
+            table[slot].fv = fv;
+            return 0;
+        }
+        if (!strcmp(table[slot].key, key))
+            return 0;
+    }
+    return -ENOMEM;
+}
+
 static FeatureVector *find_feature_vector(VmafFeatureCollector *fc,
                                           const char *feature_name)
 {
-    FeatureVector *feature_vector = NULL;
-    for (unsigned i = 0; i < fc->cnt; i++) {
-        FeatureVector *fv = fc->feature_vector[i];
-        if (!strcmp(fv->name, feature_name)) {
-            feature_vector = fv;
-            break;
-        }
-    }
-    return feature_vector;
+    return fc_hash_lookup(fc->fv_hash, feature_name);
 }
 
 int vmaf_feature_collector_append(VmafFeatureCollector *feature_collector,
@@ -340,6 +371,8 @@ int vmaf_feature_collector_append(VmafFeatureCollector *feature_collector,
         }
         feature_collector->feature_vector[feature_collector->cnt++]
             = feature_vector;
+        fc_hash_insert(feature_collector->fv_hash, feature_vector->name,
+                       feature_vector);
     }
 
     err = feature_vector_append(feature_vector, picture_index, score);
