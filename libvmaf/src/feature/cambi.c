@@ -84,6 +84,7 @@ typedef struct CambiBuffers {
     uint16_t *diffs_to_consider;
     uint16_t *tvi_for_diff;
     uint16_t *derivative_buffer;
+    uint16_t *heatmap_row;
     int *diff_weights;
     int *all_diffs;
 } CambiBuffers;
@@ -437,6 +438,8 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
             scaled_w = (scaled_w + 1) >> 1;
             scaled_h = (scaled_h + 1) >> 1;
         }
+        s->buffers.heatmap_row = malloc(alloc_w * sizeof(uint16_t));
+        if (!s->buffers.heatmap_row) return -ENOMEM;
     }
 
     s->inc_range_callback = increment_range;
@@ -1065,7 +1068,8 @@ static FORCE_INLINE double weight_scores_per_scale(double *scores_per_scale, uin
 }
 
 static int dump_c_values(FILE *heatmaps_files[], const float *c_values, int width, int height, int scale,
-                         int window_size, const uint16_t num_diffs, const int *diff_weights, int frame) {
+                         int window_size, const uint16_t num_diffs, const int *diff_weights, int frame,
+                         uint16_t *to_write) {
     int max_diff_weight = diff_weights[0];
     for (int i = 0; i < num_diffs; i++) {
         if (diff_weights[i] > max_diff_weight) {
@@ -1076,8 +1080,6 @@ static int dump_c_values(FILE *heatmaps_files[], const float *c_values, int widt
     int max_16bit_value = (1 << 16) - 1;
     double scaling_value = (double)max_16bit_value / max_c_value;
     FILE *file = heatmaps_files[scale];
-    uint16_t *to_write = malloc(width * sizeof(uint16_t));
-    if (!to_write) return -ENOMEM;
     for (int i = 0; i < height; i++) {
         for (int j = 0; j < width; j++) {
             to_write[j] = (uint16_t)(scaling_value * c_values[i * width + j]);
@@ -1086,7 +1088,6 @@ static int dump_c_values(FILE *heatmaps_files[], const float *c_values, int widt
         fseek(file, offset, SEEK_SET);
         fwrite((void*)to_write, sizeof(uint16_t), width, file);
     }
-    free(to_write);
     return 0;
 }
 
@@ -1119,7 +1120,7 @@ static int cambi_score(VmafPicture *pics, uint16_t window_size, double topk,
 
         if (write_heatmaps) {
             int err = dump_c_values(heatmaps_files, buffers.c_values, scaled_width, scaled_height, scale, window_size,
-                                    num_diffs, buffers.diff_weights, frame);
+                                    num_diffs, buffers.diff_weights, frame, buffers.heatmap_row);
             if (err) return err;
         }
 
@@ -1202,6 +1203,7 @@ static int close_cambi(VmafFeatureExtractor *fex) {
     aligned_free(s->buffers.derivative_buffer);
 
     if (s->heatmaps_path) {
+        free(s->buffers.heatmap_row);
         for (int scale = 0; scale < NUM_SCALES; scale++) {
             fclose(s->heatmaps_files[scale]);
         }
