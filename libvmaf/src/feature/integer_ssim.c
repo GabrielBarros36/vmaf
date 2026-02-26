@@ -25,8 +25,10 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include <errno.h>
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "feature_collector.h"
 #include "feature_extractor.h"
@@ -82,11 +84,22 @@ struct ssim_moments{
   int64_t w;
 };
 
+typedef struct SsimState {
+    unsigned *hkernel;
+    int hkernel_sz;
+    unsigned *vkernel;
+    int vkernel_sz;
+    ssim_moments *line_buf;
+    ssim_moments **lines;
+    int line_sz;
+} SsimState;
+
 #define SSIM_K1 (0.01*0.01)
 #define SSIM_K2 (0.03*0.03)
 
 static double calc_ssim(const unsigned char *_src,int _systride,
- const unsigned char *_dst,int _dystride,double _par,int depth,int _w,int _h){
+ const unsigned char *_dst,int _dystride,double _par,int depth,int _w,int _h,
+ SsimState *state){
   ssim_moments  *line_buf;
   ssim_moments **lines;
   double         ssim;
@@ -97,22 +110,24 @@ static double calc_ssim(const unsigned char *_src,int _systride,
   unsigned      *vkernel;
   int            vkernel_sz;
   int            vkernel_offs;
-  int            log_line_sz;
   int            line_sz;
   int            line_mask;
   int            x;
   int            y;
   int            samplemax;
   samplemax = (1 << depth) - 1;
-  vkernel_sz=gaussian_filter_init(&vkernel,1.5,5);
+
+  vkernel = state->vkernel;
+  vkernel_sz = state->vkernel_sz;
   vkernel_offs=vkernel_sz>>1;
-  for(line_sz=1,log_line_sz=0;line_sz<vkernel_sz;line_sz<<=1,log_line_sz++);
-  line_mask=line_sz-1;
-  lines=(ssim_moments **)malloc(line_sz*sizeof(*lines));
-  lines[0]=line_buf=(ssim_moments *)malloc(line_sz*_w*sizeof(*line_buf));
-  for(y=1;y<line_sz;y++)lines[y]=lines[y-1]+_w;
-  hkernel_sz=gaussian_filter_init(&hkernel,1.5,5);
+  hkernel = state->hkernel;
+  hkernel_sz = state->hkernel_sz;
   hkernel_offs=hkernel_sz>>1;
+  line_sz = state->line_sz;
+  line_mask=line_sz-1;
+  lines = state->lines;
+  line_buf = state->line_buf;
+
   ssim=0;
   ssimw=0;
   for(y=0;y<_h+vkernel_offs;y++){
@@ -189,16 +204,28 @@ static double calc_ssim(const unsigned char *_src,int _systride,
       }
     }
   }
-  free(line_buf);
-  free(lines);
-  free(vkernel);
-  free(hkernel);
   return ssim/ssimw;
 }
 
 static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
                 unsigned bpc, unsigned w, unsigned h)
 {
+    SsimState *s = fex->priv;
+
+    s->vkernel_sz = gaussian_filter_init(&s->vkernel, 1.5, 5);
+    s->hkernel_sz = gaussian_filter_init(&s->hkernel, 1.5, 5);
+
+    int log_line_sz;
+    for (s->line_sz = 1, log_line_sz = 0; s->line_sz < s->vkernel_sz;
+         s->line_sz <<= 1, log_line_sz++);
+
+    s->lines = (ssim_moments **)malloc(s->line_sz * sizeof(*s->lines));
+    if (!s->lines) return -ENOMEM;
+    s->line_buf = (ssim_moments *)malloc(s->line_sz * w * sizeof(*s->line_buf));
+    if (!s->line_buf) { free(s->lines); s->lines = NULL; return -ENOMEM; }
+    for (int y = 0; y < s->line_sz; y++)
+        s->lines[y] = s->line_buf + y * w;
+
     return 0;
 }
 
@@ -207,21 +234,28 @@ static int extract(VmafFeatureExtractor *fex,
                    VmafPicture *dist_pic, VmafPicture *dist_pic_90,
                    unsigned index, VmafFeatureCollector *feature_collector)
 {
+    SsimState *s = fex->priv;
+
     (void) ref_pic_90;
     (void) dist_pic_90;
 
     double score =
         calc_ssim(ref_pic->data[0], ref_pic->stride[0],
                   dist_pic->data[0], dist_pic->stride[0], 1.0, ref_pic->bpc,
-                  ref_pic->w[0], ref_pic->h[0]);
+                  ref_pic->w[0], ref_pic->h[0], s);
     int err =
         vmaf_feature_collector_append(feature_collector, "ssim", score, index);
     if (err) return err;
     return 0;
 }
 
-static int close(VmafFeatureExtractor *fex)
+static int close_ssim(VmafFeatureExtractor *fex)
 {
+    SsimState *s = fex->priv;
+    free(s->line_buf);
+    free(s->lines);
+    free(s->vkernel);
+    free(s->hkernel);
     return 0;
 }
 
@@ -234,6 +268,7 @@ VmafFeatureExtractor vmaf_fex_ssim = {
     .name = "ssim",
     .init = init,
     .extract = extract,
-    .close = close,
+    .close = close_ssim,
+    .priv_size = sizeof(SsimState),
     .provided_features = provided_features,
 };
