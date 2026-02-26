@@ -12,11 +12,14 @@ static int32_t div_lookup[65537];
 static const int32_t div_Q_factor = 1073741824; // 2^30
 
 static inline void div_lookup_generator() {
+    static _Bool div_lookup_initialized = 0;
+    if (div_lookup_initialized) return;
     for (int i = 1; i <= 32768; ++i) {
         int32_t recip = (int32_t)(div_Q_factor / i);
         div_lookup[32768 + i] = recip;
         div_lookup[32768 - i] = 0 - recip;
     }
+    div_lookup_initialized = 1;
 }
 
 typedef struct adm_dwt_band_t {
