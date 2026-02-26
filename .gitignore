@@ -14,3 +14,5 @@ build/
 dist/
 vmaf_output.xml
 compile_commands.json
+bench-results/*/
+!bench-results/history-x86.csv
