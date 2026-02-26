@@ -42,6 +42,8 @@ typedef struct AdmState {
                    AdmBuffer *buf, int w, int h, int src_stride,
                    int dst_stride);
     VmafDictionary *feature_name_dict;
+    float dwt_quant_step_cache[4][3];  // [lambda][theta], precomputed in init()
+    bool default_view_params;  // true when norm_view_dist * ref_display_height == default
 } AdmState;
 
 static const VmafOption options[] = {
@@ -107,6 +109,11 @@ dwt_quant_step(const struct dwt_model_params *params, int lambda, int theta,
         dwt_7_9_basis_function_amplitudes[lambda][theta];
 
     return Q;
+}
+
+static inline uint32_t ceil_log2(uint32_t n) {
+    if (n <= 1) return 0;
+    return 32 - __builtin_clz(n - 1);
 }
 
 // i = 0, j = 0: indices y: 1,0,1, x: 1,0,1  for Fixed-point
@@ -660,7 +667,7 @@ static void dwt2_src_indices_filt(int **src_ind_y, int **src_ind_x, int w, int h
 static void adm_decouple(AdmBuffer *buf, int w, int h, int stride,
                          double adm_enhn_gain_limit)
 {
-    const float cos_1deg_sq = cos(1.0 * M_PI / 180.0) * cos(1.0 * M_PI / 180.0);
+    const float cos_1deg_sq = 0.9996954135095477f;
 
     const adm_dwt_band_t *ref = &buf->ref_dwt2;
     const adm_dwt_band_t *dis = &buf->dis_dwt2;
@@ -789,7 +796,7 @@ static inline uint16_t get_best15_from32(uint32_t temp, int *x)
 static void adm_decouple_s123(AdmBuffer *buf, int w, int h, int stride,
                               double adm_enhn_gain_limit)
 {
-    const float cos_1deg_sq = cos(1.0 * M_PI / 180.0) * cos(1.0 * M_PI / 180.0);
+    const float cos_1deg_sq = 0.9996954135095477f;
 
     const i4_adm_dwt_band_t *ref = &buf->i4_ref_dwt2;
     const i4_adm_dwt_band_t *dis = &buf->i4_dis_dwt2;
@@ -930,7 +937,7 @@ static void adm_decouple_s123(AdmBuffer *buf, int w, int h, int stride,
 }
 
 static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
-                    double adm_norm_view_dist, int adm_ref_display_height)
+                    float factor1, float factor2, bool default_view_params)
 {
     const adm_dwt_band_t *src = &buf->decouple_a;
     const adm_dwt_band_t *dst = &buf->csf_a;
@@ -944,8 +951,6 @@ static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
     // 1 to 4 (from finest scale to coarsest scale).
     // 0 is scale zero passed to dwt_quant_step
 
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
     const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     /**
@@ -955,17 +960,15 @@ static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
      * i_rfactor is around { 36453,36453,49417 }
      */
     uint16_t i_rfactor[3];
-    if (fabs(adm_norm_view_dist * adm_ref_display_height - DEFAULT_ADM_NORM_VIEW_DIST * DEFAULT_ADM_REF_DISPLAY_HEIGHT) < 1.0e-8) {
+    if (default_view_params) {
         i_rfactor[0] = 36453;
         i_rfactor[1] = 36453;
         i_rfactor[2] = 49417;
     }
     else {
-        const double pow2_21 = pow(2, 21);
-        const double pow2_23 = pow(2, 23);
-        i_rfactor[0] = (uint16_t) (rfactor1[0] * pow2_21);
-        i_rfactor[1] = (uint16_t) (rfactor1[1] * pow2_21);
-        i_rfactor[2] = (uint16_t) (rfactor1[2] * pow2_23);
+        i_rfactor[0] = (uint16_t) (rfactor1[0] * 2097152.0);
+        i_rfactor[1] = (uint16_t) (rfactor1[1] * 2097152.0);
+        i_rfactor[2] = (uint16_t) (rfactor1[2] * 8388608.0);
     }
 
     /**
@@ -1022,7 +1025,7 @@ static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
 }
 
 static void i4_adm_csf(AdmBuffer *buf, int scale, int w, int h, int stride,
-                       double adm_norm_view_dist, int adm_ref_display_height)
+                       float factor1, float factor2)
 {
     const i4_adm_dwt_band_t *src = &buf->i4_decouple_a;
     const i4_adm_dwt_band_t *dst = &buf->i4_csf_a;
@@ -1034,12 +1037,10 @@ static void i4_adm_csf(AdmBuffer *buf, int scale, int w, int h, int stride,
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
     const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     //i_rfactor in fixed-point
-    const double pow2_32 = pow(2, 32);
+    const double pow2_32 = 4294967296.0;
     const uint32_t i_rfactor[3] = { (uint32_t)(rfactor1[0] * pow2_32),
                                     (uint32_t)(rfactor1[1] * pow2_32),
                                     (uint32_t)(rfactor1[2] * pow2_32) };
@@ -1100,12 +1101,10 @@ static void i4_adm_csf(AdmBuffer *buf, int scale, int w, int h, int stride,
 
 static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
                                int src_stride,
-                               double adm_norm_view_dist, int adm_ref_display_height)
+                               float factor1, float factor2)
 {
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
     const float rfactor[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     uint64_t accum_h = 0, accum_v = 0, accum_d = 0;
@@ -1167,7 +1166,7 @@ static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
      * after cubing 18bits are to shifted
      * Hence final shift is 18-shift_accum
      */
-    double shift_csf = pow(2, (18 - shift_accum));
+    double shift_csf = (double)(1u << (18 - shift_accum));
     double csf_h = (double)(accum_h / shift_csf) * pow(rfactor[0], 3);
     double csf_v = (double)(accum_v / shift_csf) * pow(rfactor[1], 3);
     double csf_d = (double)(accum_d / shift_csf) * pow(rfactor[2], 3);
@@ -1183,12 +1182,10 @@ static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
 
 static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, int h,
                               int src_stride,
-                              double adm_norm_view_dist, int adm_ref_display_height)
+                              float factor1, float factor2)
 {
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
     const float rfactor[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     uint64_t accum_h = 0, accum_v = 0, accum_d = 0;
@@ -1205,10 +1202,10 @@ static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, in
     const int right = w - left;
     const int bottom = h - top;
 
-    uint32_t shift_cub = (uint32_t)ceil(log2(right - left));
-    uint32_t add_shift_cub = (uint32_t)pow(2, (shift_cub - 1));
-    uint32_t shift_accum = (uint32_t)ceil(log2(bottom - top));
-    uint32_t add_shift_accum = (uint32_t)pow(2, (shift_accum - 1));
+    uint32_t shift_cub = ceil_log2((uint32_t)(right - left));
+    uint32_t add_shift_cub = (1u << (shift_cub - 1));
+    uint32_t shift_accum = ceil_log2((uint32_t)(bottom - top));
+    uint32_t add_shift_accum = (1u << (shift_accum - 1));
 
     int32_t *src_h = src->band_h + top * src_stride;
     int32_t *src_v = src->band_v + top * src_stride;
@@ -1250,7 +1247,7 @@ static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, in
      * All the results are converted to floating-point to calculate the scores
      * For all scales the final shift is 3*shifts from dwt - total shifts done here
      */
-    double shift_csf = pow(2, (accum_convert_float[scale - 1] - shift_accum - shift_cub));
+    double shift_csf = (double)(1ULL << (accum_convert_float[scale - 1] - shift_accum - shift_cub));
     double csf_h = (double)(accum_h / shift_csf) * pow(rfactor[0], 3);
     double csf_v = (double)(accum_v / shift_csf) * pow(rfactor[1], 3);
     double csf_d = (double)(accum_d / shift_csf) * pow(rfactor[2], 3);
@@ -1264,7 +1261,7 @@ static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, in
 }
 
 static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stride,
-                    double adm_norm_view_dist, int adm_ref_display_height)
+                    float factor1, float factor2, bool default_view_params)
 {
     const adm_dwt_band_t *src   = &buf->decouple_r;
     const adm_dwt_band_t *csf_f = &buf->csf_f;
@@ -1274,8 +1271,6 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     // 1 to 4 (from finest scale to coarsest scale).
     // 0 is scale zero passed to dwt_quant_step
 
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
     const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     /**
@@ -1285,17 +1280,15 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
      * i_rfactor is around { 36453,36453,49417 }
      */
     uint16_t i_rfactor[3];
-    if (fabs(adm_norm_view_dist * adm_ref_display_height - DEFAULT_ADM_NORM_VIEW_DIST * DEFAULT_ADM_REF_DISPLAY_HEIGHT) < 1.0e-8) {
+    if (default_view_params) {
         i_rfactor[0] = 36453;
         i_rfactor[1] = 36453;
         i_rfactor[2] = 49417;
     }
     else {
-        const double pow2_21 = pow(2, 21);
-        const double pow2_23 = pow(2, 23);
-        i_rfactor[0] = (uint16_t) (rfactor1[0] * pow2_21);
-        i_rfactor[1] = (uint16_t) (rfactor1[1] * pow2_21);
-        i_rfactor[2] = (uint16_t) (rfactor1[2] * pow2_23);
+        i_rfactor[0] = (uint16_t) (rfactor1[0] * 2097152.0);
+        i_rfactor[1] = (uint16_t) (rfactor1[1] * 2097152.0);
+        i_rfactor[2] = (uint16_t) (rfactor1[2] * 8388608.0);
     }
 
     const int32_t shift_xhsq = 29;
@@ -1305,17 +1298,17 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     const int32_t add_shift_xvsq = 268435456;
     const int32_t add_shift_xdsq = 536870912;
 
-    const uint32_t shift_xhcub = (uint32_t)ceil(log2(w) - 4);
-    const uint32_t add_shift_xhcub = (uint32_t)pow(2, (shift_xhcub - 1));
+    const uint32_t shift_xhcub = ceil_log2((uint32_t)w) - 4;
+    const uint32_t add_shift_xhcub = (1u << (shift_xhcub - 1));
 
-    const uint32_t shift_xvcub = (uint32_t)ceil(log2(w) - 4);
-    const uint32_t add_shift_xvcub = (uint32_t)pow(2, (shift_xvcub - 1));
+    const uint32_t shift_xvcub = ceil_log2((uint32_t)w) - 4;
+    const uint32_t add_shift_xvcub = (1u << (shift_xvcub - 1));
 
-    const uint32_t shift_xdcub = (uint32_t)ceil(log2(w) - 3);
-    const uint32_t add_shift_xdcub = (uint32_t)pow(2, (shift_xdcub - 1));
+    const uint32_t shift_xdcub = ceil_log2((uint32_t)w) - 3;
+    const uint32_t add_shift_xdcub = (1u << (shift_xdcub - 1));
 
-    const uint32_t shift_inner_accum = (uint32_t)ceil(log2(h));
-    const uint32_t add_shift_inner_accum = (uint32_t)pow(2, (shift_inner_accum - 1));
+    const uint32_t shift_inner_accum = ceil_log2((uint32_t)h);
+    const uint32_t add_shift_inner_accum = (1u << (shift_inner_accum - 1));
 
     const int32_t shift_xhsub = 10;
     const int32_t shift_xvsub = 10;
@@ -1630,9 +1623,9 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
      * => after cubing (6+23)*3=87 after squaring shifted by 30
      * hence pending is 57-shift's done based on width and height
      */
-    float f_accum_h = (float)(accum_h / pow(2, (52 - shift_xhcub - shift_inner_accum)));
-    float f_accum_v = (float)(accum_v / pow(2, (52 - shift_xvcub - shift_inner_accum)));
-    float f_accum_d = (float)(accum_d / pow(2, (57 - shift_xdcub - shift_inner_accum)));
+    float f_accum_h = (float)(accum_h / (double)(1ULL << (52 - shift_xhcub - shift_inner_accum)));
+    float f_accum_v = (float)(accum_v / (double)(1ULL << (52 - shift_xvcub - shift_inner_accum)));
+    float f_accum_d = (float)(accum_d / (double)(1ULL << (57 - shift_xdcub - shift_inner_accum)));
 
     float num_scale_h = powf(f_accum_h, 1.0f / 3.0f) + powf((bottom - top) *
                         (right - left) / 32.0f, 1.0f / 3.0f);
@@ -1645,7 +1638,7 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
 }
 
 static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stride, int scale,
-                       double adm_norm_view_dist, int adm_ref_display_height)
+                       float factor1, float factor2)
 {
     const i4_adm_dwt_band_t *src = &buf->i4_decouple_r;
     const i4_adm_dwt_band_t *csf_f = &buf->i4_csf_f;
@@ -1653,13 +1646,11 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
     float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
-    const uint32_t rfactor[3] = { (uint32_t)(rfactor1[0] * pow(2, 32)),
-                                  (uint32_t)(rfactor1[1] * pow(2, 32)),
-                                  (uint32_t)(rfactor1[2] * pow(2, 32)) };
+    const uint32_t rfactor[3] = { (uint32_t)(rfactor1[0] * 4294967296.0),
+                                  (uint32_t)(rfactor1[1] * 4294967296.0),
+                                  (uint32_t)(rfactor1[2] * 4294967296.0) };
 
     const uint32_t shift_dst[3] = { 28, 28, 28 };
     const uint32_t shift_flt[3] = { 32, 32, 32 };
@@ -1671,15 +1662,15 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
 
     }
 
-    uint32_t shift_cub = (uint32_t)ceil(log2(w));
-    uint32_t add_shift_cub = (uint32_t)pow(2, (shift_cub - 1));
+    uint32_t shift_cub = ceil_log2((uint32_t)w);
+    uint32_t add_shift_cub = (1u << (shift_cub - 1));
 
-    uint32_t shift_inner_accum = (uint32_t)ceil(log2(h));
-    uint32_t add_shift_inner_accum = (uint32_t)pow(2, (shift_inner_accum - 1));
+    uint32_t shift_inner_accum = ceil_log2((uint32_t)h);
+    uint32_t add_shift_inner_accum = (1u << (shift_inner_accum - 1));
 
-    float final_shift[3] = { pow(2,(45 - shift_cub - shift_inner_accum)),
-                             pow(2,(39 - shift_cub - shift_inner_accum)),
-                             pow(2,(36 - shift_cub - shift_inner_accum)) };
+    float final_shift[3] = { (float)(1ULL << (45 - shift_cub - shift_inner_accum)),
+                             (float)(1ULL << (39 - shift_cub - shift_inner_accum)),
+                             (float)(1ULL << (36 - shift_cub - shift_inner_accum)) };
 
     const int32_t shift_sq = 30;
     const int32_t add_shift_sq = 536870912; //2^29
@@ -2424,8 +2415,7 @@ static void adm_dwt2_s123_combined(const int32_t *i4_ref_scale, const int32_t *i
 
 void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic,
                          double *score, double *score_num, double *score_den, double *scores, AdmBuffer *buf,
-                         double adm_enhn_gain_limit,
-                         double adm_norm_view_dist, int adm_ref_display_height)
+                         double adm_enhn_gain_limit)
 {
     int w = ref_pic->w[0];
     int h = ref_pic->h[0];
@@ -2477,13 +2467,19 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 
 			adm_decouple(buf, w, h, buf_stride, adm_enhn_gain_limit);
 
-			den_scale = adm_csf_den_scale(&buf->ref_dwt2, w, h, buf_stride,
-                                 adm_norm_view_dist, adm_ref_display_height);
+			{
+			float f1 = s->dwt_quant_step_cache[0][1];
+			float f2 = s->dwt_quant_step_cache[0][2];
+			bool dvp = s->default_view_params;
 
-			adm_csf(buf, w, h, buf_stride, adm_norm_view_dist, adm_ref_display_height);
+			den_scale = adm_csf_den_scale(&buf->ref_dwt2, w, h, buf_stride,
+                                 f1, f2);
+
+			adm_csf(buf, w, h, buf_stride, f1, f2, dvp);
 
 			num_scale = adm_cm(buf, w, h, buf_stride, buf_stride,
-                               adm_norm_view_dist, adm_ref_display_height);
+                               f1, f2, dvp);
+			}
 		}
 		else {
             adm_dwt2_s123_combined(i4_curr_ref_scale, i4_curr_dis_scale, buf, w, h, curr_ref_stride,
@@ -2494,15 +2490,20 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 
 			adm_decouple_s123(buf, w, h, buf_stride, adm_enhn_gain_limit);
 
+			{
+			float f1 = s->dwt_quant_step_cache[scale][1];
+			float f2 = s->dwt_quant_step_cache[scale][2];
+
 			den_scale = adm_csf_den_s123(
 			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
-			        adm_norm_view_dist, adm_ref_display_height);
+			        f1, f2);
 
 			i4_adm_csf(buf, scale, w, h, buf_stride,
-              adm_norm_view_dist, adm_ref_display_height);
+              f1, f2);
 
 			num_scale = i4_adm_cm(buf, w, h, buf_stride, buf_stride, scale,
-                         adm_norm_view_dist, adm_ref_display_height);
+                         f1, f2);
+			}
 		}
 
 		num += num_scale;
@@ -2642,6 +2643,18 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
 
     div_lookup_generator();
 
+    // Precompute dwt_quant_step for all (lambda, theta) combinations
+    for (int lambda = 0; lambda < 4; lambda++) {
+        for (int theta = 0; theta < 3; theta++) {
+            s->dwt_quant_step_cache[lambda][theta] =
+                dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], lambda, theta,
+                               s->adm_norm_view_dist, s->adm_ref_display_height);
+        }
+    }
+    s->default_view_params =
+        fabs(s->adm_norm_view_dist * s->adm_ref_display_height -
+             DEFAULT_ADM_NORM_VIEW_DIST * DEFAULT_ADM_REF_DISPLAY_HEIGHT) < 1.0e-8;
+
     s->feature_name_dict =
         vmaf_feature_name_dict_from_provided_features(fex->provided_features,
                 fex->options, s);
@@ -2681,8 +2694,7 @@ static int extract(VmafFeatureExtractor *fex,
 
     integer_compute_adm(s, ref_pic, dist_pic, &score, &score_num, &score_den,
                         scores, &s->buf,
-                        s->adm_enhn_gain_limit,
-                        s->adm_norm_view_dist, s->adm_ref_display_height);
+                        s->adm_enhn_gain_limit);
 
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "VMAF_integer_feature_adm2_score", score,
