@@ -19,13 +19,18 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define VMAF_THREAD_POOL_JOB_DATA_MAX 256
 
 typedef struct VmafThreadPoolJob {
     void (*func)(void *data);
     void *data;
     struct VmafThreadPoolJob *next;
+    bool from_pool;
+    uint8_t data_buf[VMAF_THREAD_POOL_JOB_DATA_MAX];
 } VmafThreadPoolJob;
 
 typedef struct VmafTreadPool {
@@ -38,6 +43,9 @@ typedef struct VmafTreadPool {
     unsigned n_threads;
     unsigned n_working;
     bool stop;
+    VmafThreadPoolJob *job_pool;
+    VmafThreadPoolJob *free_list;
+    unsigned pool_sz;
 } VmafThreadPool;
 
 static VmafThreadPoolJob *vmaf_thread_pool_fetch_job(VmafThreadPool *pool)
@@ -55,11 +63,18 @@ static VmafThreadPoolJob *vmaf_thread_pool_fetch_job(VmafThreadPool *pool)
     return job;
 }
 
-static void vmaf_thread_pool_job_destroy(VmafThreadPoolJob *job)
+static void vmaf_thread_pool_return_job(VmafThreadPool *pool,
+                                        VmafThreadPoolJob *job)
 {
     if (!job) return;
-    if (job->data) free(job->data);
-    free(job);
+    if (job->from_pool) {
+        job->next = pool->free_list;
+        pool->free_list = job;
+    } else {
+        if (job->data && job->data != job->data_buf)
+            free(job->data);
+        free(job);
+    }
 }
 
 static void *vmaf_thread_pool_runner(void *p)
@@ -76,9 +91,9 @@ static void *vmaf_thread_pool_runner(void *p)
         pthread_mutex_unlock(&(pool->queue.lock));
         if (job) {
             job->func(job->data);
-            vmaf_thread_pool_job_destroy(job);
         }
         pthread_mutex_lock(&(pool->queue.lock));
+        vmaf_thread_pool_return_job(pool, job);
         pool->n_working--;
         if (!pool->stop && pool->n_working == 0 && !pool->queue.head)
             pthread_cond_signal(&(pool->working));
@@ -106,6 +121,25 @@ int vmaf_thread_pool_create(VmafThreadPool **pool, unsigned n_threads)
     pthread_cond_init(&(p->queue.empty), NULL);
     pthread_cond_init(&(p->working), NULL);
 
+    const unsigned pool_sz = n_threads * 8;
+    p->job_pool = malloc(sizeof(VmafThreadPoolJob) * pool_sz);
+    if (!p->job_pool) {
+        pthread_mutex_destroy(&(p->queue.lock));
+        pthread_cond_destroy(&(p->queue.empty));
+        pthread_cond_destroy(&(p->working));
+        free(p);
+        *pool = NULL;
+        return -ENOMEM;
+    }
+    p->pool_sz = pool_sz;
+    p->free_list = &p->job_pool[0];
+    for (unsigned i = 0; i < pool_sz - 1; i++) {
+        p->job_pool[i].next = &p->job_pool[i + 1];
+        p->job_pool[i].from_pool = true;
+    }
+    p->job_pool[pool_sz - 1].next = NULL;
+    p->job_pool[pool_sz - 1].from_pool = true;
+
     for (unsigned i = 0; i < n_threads; i++) {
         pthread_t thread;
         pthread_create(&thread, NULL, vmaf_thread_pool_runner, p);
@@ -121,17 +155,41 @@ int vmaf_thread_pool_enqueue(VmafThreadPool *pool, void (*func)(void *data),
     if (!pool) return -EINVAL;
     if (!func) return -EINVAL;
 
-    VmafThreadPoolJob *job = malloc(sizeof(*job));
-    if (!job) return -ENOMEM;
-    memset(job, 0, sizeof(*job));
-    job->func = func;
-    if (data) {
-        job->data = malloc(data_sz);
-        if (!job->data) goto free_job;
-        memcpy(job->data, data, data_sz);
-    }
-
     pthread_mutex_lock(&(pool->queue.lock));
+
+    VmafThreadPoolJob *job = NULL;
+    if (pool->free_list && data_sz <= VMAF_THREAD_POOL_JOB_DATA_MAX) {
+        job = pool->free_list;
+        pool->free_list = job->next;
+        job->from_pool = true;
+        job->func = func;
+        job->next = NULL;
+        job->data = NULL;
+        if (data) {
+            memcpy(job->data_buf, data, data_sz);
+            job->data = job->data_buf;
+        }
+    } else {
+        pthread_mutex_unlock(&(pool->queue.lock));
+
+        job = malloc(sizeof(*job));
+        if (!job) return -ENOMEM;
+        memset(job, 0, sizeof(*job));
+        job->from_pool = false;
+        job->func = func;
+        if (data) {
+            if (data_sz <= VMAF_THREAD_POOL_JOB_DATA_MAX) {
+                memcpy(job->data_buf, data, data_sz);
+                job->data = job->data_buf;
+            } else {
+                job->data = malloc(data_sz);
+                if (!job->data) { free(job); return -ENOMEM; }
+                memcpy(job->data, data, data_sz);
+            }
+        }
+
+        pthread_mutex_lock(&(pool->queue.lock));
+    }
 
     if (!pool->queue.head) {
         pool->queue.head = job;
@@ -145,10 +203,6 @@ int vmaf_thread_pool_enqueue(VmafThreadPool *pool, void (*func)(void *data),
     pthread_mutex_unlock(&(pool->queue.lock));
 
     return 0;
-
-free_job:
-    free(job);
-    return -ENOMEM;
 }
 
 int vmaf_thread_pool_wait(VmafThreadPool *pool)
@@ -170,7 +224,11 @@ int vmaf_thread_pool_destroy(VmafThreadPool *pool)
     VmafThreadPoolJob *job = pool->queue.head;
     while (job) {
         VmafThreadPoolJob *next_job = job->next;
-        vmaf_thread_pool_job_destroy(job);
+        if (!job->from_pool) {
+            if (job->data && job->data != job->data_buf)
+                free(job->data);
+            free(job);
+        }
         job = next_job;
     }
 
@@ -182,6 +240,7 @@ int vmaf_thread_pool_destroy(VmafThreadPool *pool)
     pthread_cond_destroy(&(pool->queue.empty));
     pthread_cond_destroy(&(pool->working));
 
+    free(pool->job_pool);
     free(pool);
     return 0;
 }
