@@ -695,6 +695,15 @@ static void adm_decouple(AdmBuffer *buf, int w, int h, int stride,
     int64_t ot_dp, o_mag_sq, t_mag_sq;
 
     for (int i = top; i < bottom; ++i) {
+        // Prefetch next row of all input bands to mitigate multi-stream access pattern
+        if (i + 1 < bottom) {
+            __builtin_prefetch(&ref->band_h[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&ref->band_v[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&ref->band_d[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&dis->band_h[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&dis->band_v[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&dis->band_d[(i + 1) * stride + left], 0, 1);
+        }
         for (int j = left; j < right; ++j) {
             int16_t oh = ref->band_h[i * stride + j];
             int16_t ov = ref->band_v[i * stride + j];
@@ -826,6 +835,15 @@ static void adm_decouple_s123(AdmBuffer *buf, int w, int h, int stride,
 
     for (int i = top; i < bottom; ++i)
     {
+        // Prefetch next row of all input bands to mitigate multi-stream access pattern
+        if (i + 1 < bottom) {
+            __builtin_prefetch(&ref->band_h[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&ref->band_v[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&ref->band_d[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&dis->band_h[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&dis->band_v[(i + 1) * stride + left], 0, 1);
+            __builtin_prefetch(&dis->band_d[(i + 1) * stride + left], 0, 1);
+        }
         for (int j = left; j < right; ++j)
         {
             int32_t oh = ref->band_h[i * stride + j];
@@ -1131,6 +1149,12 @@ static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
     int16_t *src_v = src->band_v + top * src_stride;
     int16_t *src_d = src->band_d + top * src_stride;
     for (int i = top; i < bottom; ++i) {
+        // Prefetch next row of all source bands
+        if (i + 1 < bottom) {
+            __builtin_prefetch(src_h + src_stride, 0, 1);
+            __builtin_prefetch(src_v + src_stride, 0, 1);
+            __builtin_prefetch(src_d + src_stride, 0, 1);
+        }
         uint64_t accum_inner_h = 0;
         uint64_t accum_inner_v = 0;
         uint64_t accum_inner_d = 0;
@@ -1212,6 +1236,12 @@ static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, in
     int32_t *src_d = src->band_d + top * src_stride;
     for (int i = top; i < bottom; ++i)
     {
+        // Prefetch next row of all source bands
+        if (i + 1 < bottom) {
+            __builtin_prefetch(src_h + src_stride, 0, 1);
+            __builtin_prefetch(src_v + src_stride, 0, 1);
+            __builtin_prefetch(src_d + src_stride, 0, 1);
+        }
         uint64_t accum_inner_h = 0;
         uint64_t accum_inner_v = 0;
         uint64_t accum_inner_d = 0;
@@ -1409,6 +1439,20 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
+            /* Prefetch next row of band arrays */
+            if (i + 1 < end_row) {
+                int next_src_off = (i + 1) * src_stride + start_col;
+                int next_csf_off = (i + 1) * csf_a_stride + start_col;
+                __builtin_prefetch(&src->band_h[next_src_off], 0, 1);
+                __builtin_prefetch(&src->band_v[next_src_off], 0, 1);
+                __builtin_prefetch(&src->band_d[next_src_off], 0, 1);
+                __builtin_prefetch(&angles[0][next_csf_off], 0, 1);
+                __builtin_prefetch(&angles[1][next_csf_off], 0, 1);
+                __builtin_prefetch(&angles[2][next_csf_off], 0, 1);
+                __builtin_prefetch(&flt_angles[0][next_csf_off], 0, 1);
+                __builtin_prefetch(&flt_angles[1][next_csf_off], 0, 1);
+                __builtin_prefetch(&flt_angles[2][next_csf_off], 0, 1);
+            }
             for (j = start_col; j < end_col; ++j) {
                 xh = src->band_h[i * src_stride + j] * i_rfactor[0];
                 xv = src->band_v[i * src_stride + j] * i_rfactor[1];
@@ -1771,6 +1815,20 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
+            /* Prefetch next row of band arrays */
+            if (i + 1 < end_row) {
+                int next_src_off = (i + 1) * src_stride + start_col;
+                int next_csf_off = (i + 1) * csf_a_stride + start_col;
+                __builtin_prefetch(&src->band_h[next_src_off], 0, 1);
+                __builtin_prefetch(&src->band_v[next_src_off], 0, 1);
+                __builtin_prefetch(&src->band_d[next_src_off], 0, 1);
+                __builtin_prefetch(&angles[0][next_csf_off], 0, 1);
+                __builtin_prefetch(&angles[1][next_csf_off], 0, 1);
+                __builtin_prefetch(&angles[2][next_csf_off], 0, 1);
+                __builtin_prefetch(&flt_angles[0][next_csf_off], 0, 1);
+                __builtin_prefetch(&flt_angles[1][next_csf_off], 0, 1);
+                __builtin_prefetch(&flt_angles[2][next_csf_off], 0, 1);
+            }
             for (j = start_col; j < end_col; ++j)
             {
 

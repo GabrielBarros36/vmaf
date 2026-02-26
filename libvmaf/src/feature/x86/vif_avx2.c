@@ -212,13 +212,13 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
             uint64_t accum_ref = 0;
             uint64_t accum_dis = 0;
             uint64_t accum_ref_dis = 0;
+            const int ii = i - fwidth / 2;
+            const uint8_t *ref = (uint8_t*)buf.ref;
+            const uint8_t *dis = (uint8_t*)buf.dis;
 
             for (unsigned fi = 0; fi < fwidth; ++fi) {
-                int ii = i - fwidth / 2;
                 int ii_check = ii + fi;
                 const uint16_t fcoeff = vif_filt_s0[fi];
-                const uint8_t *ref = (uint8_t*)buf.ref;
-                const uint8_t *dis = (uint8_t*)buf.dis;
                 uint16_t imgcoeff_ref = ref[ii_check * buf.stride + j];
                 uint16_t imgcoeff_dis = dis[ii_check * buf.stride + j];
                 uint32_t img_coeff_ref = fcoeff * (uint32_t)imgcoeff_ref;
@@ -775,12 +775,12 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
             uint64_t accum_ref = 0;
             uint64_t accum_dis = 0;
             uint64_t accum_ref_dis = 0;
+            uint16_t *ref = buf.ref;
+            uint16_t *dis = buf.dis;
 
             int ii_check = ii;
             for (unsigned fi = 0; fi < fwidth; ++fi, ii_check = ii + fi) {
                 const uint16_t fcoeff = vif_filt[fi];
-                uint16_t *ref = buf.ref;
-                uint16_t *dis = buf.dis;
                 uint16_t imgcoeff_ref = ref[ii_check * stride + j];
                 uint16_t imgcoeff_dis = dis[ii_check * stride + j];
                 uint32_t img_coeff_ref = fcoeff * (uint32_t)imgcoeff_ref;
