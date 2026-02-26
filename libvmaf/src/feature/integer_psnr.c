@@ -23,9 +23,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cpu.h"
 #include "feature_collector.h"
 #include "feature_extractor.h"
 #include "opt.h"
+
+#if ARCH_X86
+#include "x86/psnr_avx2.h"
+#endif
 
 typedef struct PsnrState {
     bool enable_chroma;
@@ -39,6 +44,12 @@ typedef struct PsnrState {
         uint64_t sse[3];
         uint64_t n_pixels[3];
     } apsnr;
+    void (*compute_sse_8)(const uint8_t *ref, const uint8_t *dis,
+                          uint64_t *sse, unsigned width, unsigned height,
+                          ptrdiff_t ref_stride, ptrdiff_t dis_stride);
+    void (*compute_sse_16)(const uint16_t *ref, const uint16_t *dis,
+                           uint64_t *sse, unsigned width, unsigned height,
+                           ptrdiff_t ref_stride, ptrdiff_t dis_stride);
 } PsnrState;
 
 static const VmafOption options[] = {
@@ -83,6 +94,40 @@ static const VmafOption options[] = {
 };
 
 
+static void psnr_sse_8_c(const uint8_t *ref, const uint8_t *dis,
+                         uint64_t *sse, unsigned width, unsigned height,
+                         ptrdiff_t ref_stride, ptrdiff_t dis_stride)
+{
+    uint64_t total_sse = 0;
+    for (unsigned i = 0; i < height; i++) {
+        uint32_t sse_inner = 0;
+        for (unsigned j = 0; j < width; j++) {
+            const int16_t e = ref[j] - dis[j];
+            sse_inner += e * e;
+        }
+        total_sse += sse_inner;
+        ref += ref_stride;
+        dis += dis_stride;
+    }
+    *sse = total_sse;
+}
+
+static void psnr_sse_16_c(const uint16_t *ref, const uint16_t *dis,
+                           uint64_t *sse, unsigned width, unsigned height,
+                           ptrdiff_t ref_stride, ptrdiff_t dis_stride)
+{
+    uint64_t total_sse = 0;
+    for (unsigned i = 0; i < height; i++) {
+        for (unsigned j = 0; j < width; j++) {
+            const uint32_t e = abs(ref[j] - dis[j]);
+            total_sse += (uint64_t)e * e;
+        }
+        ref += ref_stride;
+        dis += dis_stride;
+    }
+    *sse = total_sse;
+}
+
 static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
                 unsigned bpc, unsigned w, unsigned h)
 {
@@ -104,6 +149,17 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
         }
     }
 
+    s->compute_sse_8 = psnr_sse_8_c;
+    s->compute_sse_16 = psnr_sse_16_c;
+
+#if ARCH_X86
+    unsigned flags = vmaf_get_cpu_flags();
+    if (flags & VMAF_X86_CPU_FLAG_AVX2) {
+        s->compute_sse_8 = psnr_sse_8_avx2;
+        s->compute_sse_16 = psnr_sse_16_avx2;
+    }
+#endif
+
     return 0;
 }
 
@@ -123,20 +179,14 @@ static int psnr(VmafPicture *ref_pic, VmafPicture *dist_pic,
     int err = 0;
 
     for (unsigned p = 0; p < n; p++) {
-        uint8_t *ref = ref_pic->data[p];
-        uint8_t *dis = dist_pic->data[p];
-
         uint64_t sse = 0;
-        for (unsigned i = 0; i < ref_pic->h[p]; i++) {
-            uint32_t sse_inner = 0;
-            for (unsigned j = 0; j < ref_pic->w[p]; j++) {
-                const int16_t e = ref[j] - dis[j];
-                sse_inner += e * e;
-            }
-            sse += sse_inner;
-            ref += ref_pic->stride[p];
-            dis += dist_pic->stride[p];
-        }
+        void (*sse_fn)(const uint8_t *, const uint8_t *,
+                       uint64_t *, unsigned, unsigned,
+                       ptrdiff_t, ptrdiff_t) =
+            s->compute_sse_8 ? s->compute_sse_8 : psnr_sse_8_c;
+        sse_fn(ref_pic->data[p], dist_pic->data[p],
+               &sse, ref_pic->w[p], ref_pic->h[p],
+               ref_pic->stride[p], dist_pic->stride[p]);
 
         if (s->enable_apsnr) {
             s->apsnr.sse[p] += sse;
@@ -167,18 +217,14 @@ static int psnr_hbd(VmafPicture *ref_pic, VmafPicture *dist_pic,
     int err = 0;
 
     for (unsigned p = 0; p < n; p++) {
-        uint16_t *ref = ref_pic->data[p];
-        uint16_t *dis = dist_pic->data[p];
-
         uint64_t sse = 0;
-        for (unsigned i = 0; i < ref_pic->h[p]; i++) {
-            for (unsigned j = 0; j < ref_pic->w[p]; j++) {
-                const uint32_t e = abs(ref[j] - dis[j]);
-                sse += e * e;
-            }
-            ref += ref_pic->stride[p] / 2;
-            dis += dist_pic->stride[p] / 2;
-        }
+        void (*sse_fn)(const uint16_t *, const uint16_t *,
+                       uint64_t *, unsigned, unsigned,
+                       ptrdiff_t, ptrdiff_t) =
+            s->compute_sse_16 ? s->compute_sse_16 : psnr_sse_16_c;
+        sse_fn(ref_pic->data[p], dist_pic->data[p],
+               &sse, ref_pic->w[p], ref_pic->h[p],
+               ref_pic->stride[p] / 2, dist_pic->stride[p] / 2);
 
         if (s->enable_apsnr) {
             s->apsnr.sse[p] += sse;
