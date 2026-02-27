@@ -30,4 +30,10 @@ void adm_csf_s0_avx2(AdmBuffer *buf, int w, int h, int stride,
                       const uint8_t i_shifts[3],
                       const uint16_t i_shiftsadd[3]);
 
+void adm_csf_den_s0_avx2(const adm_dwt_band_t *src, int w, int h,
+                          int src_stride, int left, int top,
+                          int right, int bottom,
+                          int32_t shift_accum, int32_t add_shift_accum,
+                          uint64_t *out_h, uint64_t *out_v, uint64_t *out_d);
+
 #endif /* X86_AVX2_ADM_H_ */

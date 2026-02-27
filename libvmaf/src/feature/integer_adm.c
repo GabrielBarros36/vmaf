@@ -1156,6 +1156,20 @@ static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
      * Because d+ = (a[i]^3)*(r^3)
      * is equivalent to d+=a[i]^3 and d=d*(r^3)
      */
+
+#if ARCH_X86
+    {
+        unsigned flags = vmaf_get_cpu_flags();
+        if (flags & VMAF_X86_CPU_FLAG_AVX2) {
+            adm_csf_den_s0_avx2(src, w, h, src_stride, left, top, right, bottom,
+                                shift_accum, add_shift_accum,
+                                &accum_h, &accum_v, &accum_d);
+            goto csf_den_done;
+        }
+    }
+#endif
+
+    {
     int16_t *src_h = src->band_h + top * src_stride;
     int16_t *src_v = src->band_v + top * src_stride;
     int16_t *src_d = src->band_d + top * src_stride;
@@ -1194,6 +1208,11 @@ static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
         src_v += src_stride;
         src_d += src_stride;
     }
+    }
+
+#if ARCH_X86
+csf_den_done:
+#endif
     /**
      * rfactor is multiplied after cubing
      * accum_h,v,d is converted to floating-point for score calculation
