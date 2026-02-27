@@ -321,3 +321,153 @@ fail_or_end:
     return ret;
 
 }
+
+int compute_ms_ssim_with_buf(const float *ref, const float *cmp, int w, int h,
+        int ref_stride, int cmp_stride, double *score,
+        double* l_scores, double* c_scores, double* s_scores,
+        float **ref_imgs, float **cmp_imgs)
+{
+
+    int ret = 1;
+
+    int wang=1;
+    int scales=SCALES;
+    int gauss=1;
+    const float *alphas=g_alphas, *betas=g_betas, *gammas=g_gammas;
+    int idx,x,y,cur_w,cur_h;
+    int offset,src_offset;
+    double msssim;
+    float l, c, s;
+    struct _kernel lpf, window;
+    struct iqa_ssim_args s_args;
+    struct _map_reduce mr;
+    struct _context ms_ctx;
+
+    int stride = ref_stride;
+    if (stride != cmp_stride)
+    {
+        printf("error: for ms_ssim, ref_stride (%d) != dis_stride (%d) bytes.\n", ref_stride, cmp_stride);
+        fflush(stdout);
+        goto fail_or_end;
+    }
+    stride /= sizeof(float);
+
+    const struct iqa_ms_ssim_args *args = 0;
+
+    if (args) {
+        wang   = args->wang;
+        gauss  = args->gaussian;
+        scales = args->scales;
+        if (args->alphas)
+            alphas = args->alphas;
+        if (args->betas)
+            betas  = args->betas;
+        if (args->gammas)
+            gammas = args->gammas;
+    }
+
+    cur_w = w;
+    cur_h = h;
+    for (idx=0; idx<scales; ++idx) {
+        if ( gauss ? cur_w<GAUSSIAN_LEN || cur_h<GAUSSIAN_LEN : cur_w<LPF_LEN || cur_h<LPF_LEN )
+        {
+            printf("error: scale below 1x1!\n");
+            goto fail_or_end;
+        }
+        cur_w /= 2;
+        cur_h /= 2;
+    }
+
+    window.kernel = (float*)g_square_window;
+    window.kernel_h = (float*)g_square_window_h;
+    window.kernel_v = (float*)g_square_window_v;
+    window.w = window.h = SQUARE_LEN;
+    window.normalized = 1;
+    window.bnd_opt = KBND_SYMMETRIC;
+    if (gauss) {
+        window.kernel = (float*)g_gaussian_window;
+        window.kernel_h = (float*)g_gaussian_window_h;
+        window.kernel_v = (float*)g_gaussian_window_v;
+        window.w = window.h = GAUSSIAN_LEN;
+    }
+
+    mr.map     = _ms_ssim_map;
+    mr.reduce  = _ms_ssim_reduce;
+
+    /* copy original images into first scale buffer, forcing stride = width. */
+    for (y=0; y<h; ++y) {
+        src_offset = y * stride;
+        offset = y * w;
+        for (x=0; x<w; ++x, ++offset, ++src_offset) {
+            ref_imgs[0][offset] = (float)ref[src_offset];
+            cmp_imgs[0][offset] = (float)cmp[src_offset];
+        }
+    }
+
+    /* create scaled versions of the images */
+    cur_w=w;
+    cur_h=h;
+    lpf.kernel = (float*)g_lpf;
+    lpf.kernel_h = (float*)g_lpf_h;
+    lpf.kernel_v = (float*)g_lpf_v;
+    lpf.w = lpf.h = LPF_LEN;
+    lpf.normalized = 1;
+    lpf.bnd_opt = KBND_SYMMETRIC;
+    for (idx=1; idx<scales; ++idx) {
+        if (_iqa_decimate(ref_imgs[idx-1], cur_w, cur_h, 2, &lpf, ref_imgs[idx], 0, 0) ||
+            _iqa_decimate(cmp_imgs[idx-1], cur_w, cur_h, 2, &lpf, cmp_imgs[idx], &cur_w, &cur_h))
+        {
+            printf("error: decimation fails on ref_imgs or cmp_imgs.\n");
+            fflush(stdout);
+            goto fail_or_end;
+        }
+    }
+
+    cur_w=w;
+    cur_h=h;
+    msssim = 1.0;
+    for (idx=0; idx<scales; ++idx) {
+
+        ms_ctx.l = 0;
+        ms_ctx.c = 0;
+        ms_ctx.s = 0;
+        ms_ctx.alpha = alphas[idx];
+        ms_ctx.beta  = betas[idx];
+        ms_ctx.gamma = gammas[idx];
+
+        if (!wang) {
+            s_args.alpha = 1.0f;
+            s_args.beta  = 1.0f;
+            s_args.gamma = 1.0f;
+            s_args.K1 = 0.0f;
+            s_args.K2 = 0.0f;
+            s_args.L  = 255;
+            s_args.f  = 1;
+            mr.context = &ms_ctx;
+            _iqa_ssim(ref_imgs[idx], cmp_imgs[idx], cur_w, cur_h, &window, &mr, &s_args, &l, &c, &s);
+        }
+        else {
+            _iqa_ssim(ref_imgs[idx], cmp_imgs[idx], cur_w, cur_h, &window, NULL, NULL, &l, &c, &s);
+        }
+
+        msssim *= pow(l, alphas[idx]) * pow(c, betas[idx]) * pow(s, gammas[idx]);
+        l_scores[idx] = l;
+        c_scores[idx] = c;
+        s_scores[idx] = s;
+
+        if (msssim == INFINITY) {
+            printf("error: ms_ssim is INFINITY.\n");
+            fflush(stdout);
+            goto fail_or_end;
+        }
+        cur_w = cur_w/2 + (cur_w&1);
+        cur_h = cur_h/2 + (cur_h&1);
+    }
+
+    *score = msssim;
+
+    ret = 0;
+fail_or_end:
+    return ret;
+
+}

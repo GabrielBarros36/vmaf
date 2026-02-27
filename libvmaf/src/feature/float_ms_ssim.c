@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <math.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 #include "feature_collector.h"
 #include "feature_extractor.h"
@@ -26,6 +27,8 @@
 #include "mem.h"
 #include "ms_ssim.h"
 #include "picture_copy.h"
+
+#include "iqa/ssim_tools.h"
 
 typedef struct MsSsimState {
     size_t float_stride;
@@ -35,6 +38,9 @@ typedef struct MsSsimState {
     bool enable_db;
     bool clip_db;
     double max_db;
+    float *scale_bufs[SCALES * 2];
+    float *ref_imgs[SCALES];
+    float *cmp_imgs[SCALES];
 } MsSsimState;
 
 static const VmafOption options[] = {
@@ -83,10 +89,32 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     s->dist = aligned_malloc(s->float_stride * h, 32);
     if (!s->dist) goto free_ref;
 
+    {
+        unsigned cur_w = w;
+        unsigned cur_h = h;
+        for (int i = 0; i < SCALES; i++) {
+            s->scale_bufs[i] = (float*)malloc(cur_w * cur_h * sizeof(float));
+            s->scale_bufs[SCALES + i] = (float*)malloc(cur_w * cur_h * sizeof(float));
+            if (!s->scale_bufs[i] || !s->scale_bufs[SCALES + i]) {
+                for (int j = 0; j <= i; j++) {
+                    free(s->scale_bufs[j]);
+                    free(s->scale_bufs[SCALES + j]);
+                }
+                goto free_dist;
+            }
+            s->ref_imgs[i] = s->scale_bufs[i];
+            s->cmp_imgs[i] = s->scale_bufs[SCALES + i];
+            cur_w = cur_w / 2 + (cur_w & 1);
+            cur_h = cur_h / 2 + (cur_h & 1);
+        }
+    }
+
     return 0;
 
+free_dist:
+    aligned_free(s->dist);
 free_ref:
-    free(s->ref);
+    aligned_free(s->ref);
 fail:
     return -ENOMEM;
 }
@@ -113,9 +141,10 @@ static int extract(VmafFeatureExtractor *fex,
     picture_copy(s->dist, s->float_stride, dist_pic, 0, dist_pic->bpc);
 
     double score, l_scores[5], c_scores[5], s_scores[5];
-    err = compute_ms_ssim(s->ref, s->dist, ref_pic->w[0], ref_pic->h[0],
+    err = compute_ms_ssim_with_buf(s->ref, s->dist, ref_pic->w[0], ref_pic->h[0],
                           s->float_stride, s->float_stride,
-                          &score, l_scores, c_scores, s_scores);
+                          &score, l_scores, c_scores, s_scores,
+                          s->ref_imgs, s->cmp_imgs);
     if (err) return err;
 
     if (s->enable_db)
@@ -134,7 +163,6 @@ static int extract(VmafFeatureExtractor *fex,
                 "float_ms_ssim_l_scale3", l_scores[3], index);
         err |= vmaf_feature_collector_append(feature_collector,
                 "float_ms_ssim_l_scale4", l_scores[4], index);
-
         err |= vmaf_feature_collector_append(feature_collector,
                 "float_ms_ssim_c_scale0", c_scores[0], index);
         err |= vmaf_feature_collector_append(feature_collector,
@@ -145,7 +173,6 @@ static int extract(VmafFeatureExtractor *fex,
                 "float_ms_ssim_c_scale3", c_scores[3], index);
         err |= vmaf_feature_collector_append(feature_collector,
                 "float_ms_ssim_c_scale4", c_scores[4], index);
-
         err |= vmaf_feature_collector_append(feature_collector,
                 "float_ms_ssim_s_scale0", s_scores[0], index);
         err |= vmaf_feature_collector_append(feature_collector,
@@ -166,6 +193,8 @@ static int close(VmafFeatureExtractor *fex)
     MsSsimState *s = fex->priv;
     if (s->ref) aligned_free(s->ref);
     if (s->dist) aligned_free(s->dist);
+    for (int i = 0; i < SCALES * 2; i++)
+        free(s->scale_bufs[i]);
     return 0;
 }
 

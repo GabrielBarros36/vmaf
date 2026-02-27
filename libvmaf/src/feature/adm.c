@@ -290,3 +290,130 @@ fail:
 	aligned_free(buf_x_orig);
 	return ret;
 }
+
+int compute_adm_with_buf(const float *ref, const float *dis, int w, int h,
+                int ref_stride, int dis_stride, double *score,
+                double *score_num, double *score_den, double *scores,
+                double border_factor, double adm_enhn_gain_limit,
+                double adm_norm_view_dist, int adm_ref_display_height,
+                int adm_csf_mode,
+                float *data_buf, size_t buf_sz_one,
+                char *buf_y_orig, int ind_size_y,
+                char *buf_x_orig, int ind_size_x)
+{
+#ifdef ADM_OPT_SINGLE_PRECISION
+	double numden_limit = 1e-2 * (w * h) / (1920.0 * 1080.0);
+#else
+	double numden_limit = 1e-10 * (w * h) / (1920.0 * 1080.0);
+#endif
+	char *data_top;
+
+	char *ind_buf_y = 0;
+	char *ind_buf_x = 0;
+	int *ind_y[4], *ind_x[4];
+
+	float *ref_scale;
+	float *dis_scale;
+
+	adm_dwt_band_t ref_dwt2;
+	adm_dwt_band_t dis_dwt2;
+
+	adm_dwt_band_t decouple_r;
+	adm_dwt_band_t decouple_a;
+
+	adm_dwt_band_t csf_a;
+	adm_dwt_band_t csf_f;
+
+	const float *curr_ref_scale = ref;
+	const float *curr_dis_scale = dis;
+	int curr_ref_stride = ref_stride;
+	int curr_dis_stride = dis_stride;
+
+	int orig_h = h;
+
+	int buf_stride = ALIGN_CEIL(((w + 1) / 2) * sizeof(float));
+
+	double num = 0;
+	double den = 0;
+
+	int scale;
+
+	data_top = (char *)data_buf;
+
+	data_top = init_dwt_band(&ref_dwt2, data_top, buf_sz_one);
+	data_top = init_dwt_band(&dis_dwt2, data_top, buf_sz_one);
+	data_top = init_dwt_band_hvd(&decouple_r, data_top, buf_sz_one);
+	data_top = init_dwt_band_hvd(&decouple_a, data_top, buf_sz_one);
+	data_top = init_dwt_band_hvd(&csf_a, data_top, buf_sz_one);
+	data_top = init_dwt_band_hvd(&csf_f, data_top, buf_sz_one);
+
+	ind_buf_y = buf_y_orig;
+	ind_y[0] = (int*)ind_buf_y; ind_buf_y += ind_size_y;
+	ind_y[1] = (int*)ind_buf_y; ind_buf_y += ind_size_y;
+	ind_y[2] = (int*)ind_buf_y; ind_buf_y += ind_size_y;
+	ind_y[3] = (int*)ind_buf_y; ind_buf_y += ind_size_y;
+
+	ind_buf_x = buf_x_orig;
+	ind_x[0] = (int*)ind_buf_x; ind_buf_x += ind_size_x;
+	ind_x[1] = (int*)ind_buf_x; ind_buf_x += ind_size_x;
+	ind_x[2] = (int*)ind_buf_x; ind_buf_x += ind_size_x;
+	ind_x[3] = (int*)ind_buf_x; ind_buf_x += ind_size_x;
+
+	for (scale = 0; scale < 4; ++scale) {
+		float num_scale = 0.0;
+		float den_scale = 0.0;
+
+		dwt2_src_indices_filt(ind_y, ind_x, w, h);
+		adm_dwt2(curr_ref_scale, &ref_dwt2, ind_y, ind_x, w, h, curr_ref_stride, buf_stride);
+		adm_dwt2(curr_dis_scale, &dis_dwt2, ind_y, ind_x, w, h, curr_dis_stride, buf_stride);
+
+		w = (w + 1) / 2;
+		h = (h + 1) / 2;
+
+		adm_decouple(&ref_dwt2, &dis_dwt2, &decouple_r, &decouple_a, w, h,
+		        buf_stride, buf_stride, buf_stride, buf_stride, border_factor, adm_enhn_gain_limit);
+
+		den_scale = adm_csf_den_scale(&ref_dwt2, orig_h, scale, w, h,
+                                buf_stride, border_factor,
+                                adm_norm_view_dist, adm_ref_display_height, adm_csf_mode);
+
+		adm_csf(&decouple_a, &csf_a, &csf_f, orig_h, scale, w, h, buf_stride,
+          buf_stride, border_factor,
+          adm_norm_view_dist, adm_ref_display_height, adm_csf_mode);
+
+		num_scale = adm_cm(&decouple_r, &csf_f, &csf_a, w, h, buf_stride,
+                     buf_stride, buf_stride, border_factor, scale,
+                     adm_norm_view_dist, adm_ref_display_height, adm_csf_mode);
+
+		num += num_scale;
+		den += den_scale;
+
+		ref_scale = ref_dwt2.band_a;
+		dis_scale = dis_dwt2.band_a;
+
+		curr_ref_scale = ref_scale;
+		curr_dis_scale = dis_scale;
+
+		curr_ref_stride = buf_stride;
+		curr_dis_stride = buf_stride;
+
+		scores[2 * scale + 0] = num_scale;
+		scores[2 * scale + 1] = den_scale;
+	}
+
+	num = num < numden_limit ? 0 : num;
+	den = den < numden_limit ? 0 : den;
+
+	if (den == 0.0)
+	{
+		*score = 1.0f;
+	}
+	else
+	{
+		*score = num / den;
+	}
+	*score_num = num;
+	*score_den = den;
+
+	return 0;
+}
