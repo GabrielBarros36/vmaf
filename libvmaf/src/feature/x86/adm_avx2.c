@@ -19,6 +19,7 @@
 #include "feature/integer_adm.h"
 
 #include <immintrin.h>
+#include <math.h>
 
 void adm_dwt2_8_avx2(const uint8_t *src, const adm_dwt_band_t *dst,
                      AdmBuffer *buf, int w, int h, int src_stride,
@@ -269,6 +270,92 @@ void adm_dwt2_8_avx2(const uint8_t *src, const adm_dwt_band_t *dst,
                 _mm256_storeu_si256(
                     (__m256i *)(dst->band_d + i * dst_stride + j),
                     accum_mu1_hi);
+            }
+        }
+    }
+}
+
+void adm_csf_s0_avx2(AdmBuffer *buf, int w, int h, int stride,
+                      const uint16_t i_rfactor[3],
+                      const uint8_t i_shifts[3],
+                      const uint16_t i_shiftsadd[3])
+{
+    const adm_dwt_band_t *src = &buf->decouple_a;
+    const adm_dwt_band_t *dst = &buf->csf_a;
+    const adm_dwt_band_t *flt = &buf->csf_f;
+
+    const int16_t *src_angles[3] = { src->band_h, src->band_v, src->band_d };
+    int16_t *dst_angles[3] = { dst->band_h, dst->band_v, dst->band_d };
+    int16_t *flt_angles[3] = { flt->band_h, flt->band_v, flt->band_d };
+
+    const uint16_t FIX_ONE_BY_30 = 4369;
+
+    int left = w * ADM_BORDER_FACTOR - 0.5 - 1;
+    int top = h * ADM_BORDER_FACTOR - 0.5 - 1;
+    int right = w - left + 2;
+    int bottom = h - top + 2;
+
+    if (left < 0) left = 0;
+    if (right > w) right = w;
+    if (top < 0) top = 0;
+    if (bottom > h) bottom = h;
+
+    for (int theta = 0; theta < 3; ++theta) {
+        const int16_t *src_ptr = src_angles[theta];
+        int16_t *dst_ptr = dst_angles[theta];
+        int16_t *flt_ptr = flt_angles[theta];
+
+        const __m256i rfact = _mm256_set1_epi32((int32_t)i_rfactor[theta]);
+        const __m128i shift_cnt = _mm_cvtsi32_si128(i_shifts[theta]);
+        const __m256i shift_add = _mm256_set1_epi32(i_shiftsadd[theta]);
+        const __m256i fix30 = _mm256_set1_epi32(FIX_ONE_BY_30);
+        const __m256i round_2048 = _mm256_set1_epi32(2048);
+
+        for (int i = top; i < bottom; ++i) {
+            int offset = i * stride;
+            int j = left;
+
+            /* AVX2: process 16 int16 values per iteration */
+            for (; j + 16 <= right; j += 16) {
+                __m256i s = _mm256_loadu_si256((const __m256i *)(src_ptr + offset + j));
+
+                /* Sign-extend int16 to int32 (two halves) */
+                __m256i s_lo = _mm256_cvtepi16_epi32(_mm256_castsi256_si128(s));
+                __m256i s_hi = _mm256_cvtepi16_epi32(_mm256_extracti128_si256(s, 1));
+
+                /* Multiply by i_rfactor (int32 * int32 → int32, no overflow) */
+                __m256i d_lo = _mm256_mullo_epi32(s_lo, rfact);
+                __m256i d_hi = _mm256_mullo_epi32(s_hi, rfact);
+
+                /* Add rounding and arithmetic shift right */
+                d_lo = _mm256_sra_epi32(_mm256_add_epi32(d_lo, shift_add), shift_cnt);
+                d_hi = _mm256_sra_epi32(_mm256_add_epi32(d_hi, shift_add), shift_cnt);
+
+                /* Pack int32 back to int16 (saturating, within 128-bit lanes) */
+                __m256i d_packed = _mm256_packs_epi32(d_lo, d_hi);
+                /* Fix lane order: packs interleaves within 128-bit lanes */
+                d_packed = _mm256_permute4x64_epi64(d_packed, 0xD8);
+                _mm256_storeu_si256((__m256i *)(dst_ptr + offset + j), d_packed);
+
+                /* Compute flt = (FIX_ONE_BY_30 * abs(dst_val) + 2048) >> 12 */
+                __m256i abs_lo = _mm256_abs_epi32(d_lo);
+                __m256i abs_hi = _mm256_abs_epi32(d_hi);
+                __m256i f_lo = _mm256_srli_epi32(
+                    _mm256_add_epi32(_mm256_mullo_epi32(abs_lo, fix30), round_2048), 12);
+                __m256i f_hi = _mm256_srli_epi32(
+                    _mm256_add_epi32(_mm256_mullo_epi32(abs_hi, fix30), round_2048), 12);
+                __m256i f_packed = _mm256_packs_epi32(f_lo, f_hi);
+                f_packed = _mm256_permute4x64_epi64(f_packed, 0xD8);
+                _mm256_storeu_si256((__m256i *)(flt_ptr + offset + j), f_packed);
+            }
+
+            /* Scalar remainder */
+            for (; j < right; ++j) {
+                int32_t dst_val = i_rfactor[theta] * (int32_t)src_ptr[offset + j];
+                int16_t i16_dst_val = (int16_t)((dst_val + i_shiftsadd[theta]) >> i_shifts[theta]);
+                dst_ptr[offset + j] = i16_dst_val;
+                flt_ptr[offset + j] = (int16_t)(((FIX_ONE_BY_30 * abs((int32_t)i16_dst_val))
+                    + 2048) >> 12);
             }
         }
     }

@@ -25,4 +25,9 @@ void adm_dwt2_8_avx2(const uint8_t *src, const adm_dwt_band_t *dst,
                      AdmBuffer *buf, int w, int h, int src_stride,
                      int dst_stride);
 
+void adm_csf_s0_avx2(AdmBuffer *buf, int w, int h, int stride,
+                      const uint16_t i_rfactor[3],
+                      const uint8_t i_shifts[3],
+                      const uint16_t i_shiftsadd[3]);
+
 #endif /* X86_AVX2_ADM_H_ */
