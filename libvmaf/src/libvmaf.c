@@ -83,6 +83,7 @@ typedef struct VmafContext {
     } pic_params;
     unsigned pic_cnt;
     bool flushed;
+    bool pic_params_validated;
 } VmafContext;
 
 
@@ -461,6 +462,9 @@ static int threaded_read_pictures(VmafContext *vmaf, VmafPicture *ref,
 static int validate_pic_params(VmafContext *vmaf, VmafPicture *ref,
                                VmafPicture *dist)
 {
+    if (vmaf->pic_params_validated)
+        return 0;
+
     VmafPicturePrivate *ref_priv = ref->priv;
     VmafPicturePrivate *dist_priv = dist->priv;
 
@@ -486,6 +490,7 @@ static int validate_pic_params(VmafContext *vmaf, VmafPicture *ref,
     if (ref_priv->buf_type != dist_priv->buf_type)
         return -EINVAL;
 
+    vmaf->pic_params_validated = true;
     return 0;
 }
 
