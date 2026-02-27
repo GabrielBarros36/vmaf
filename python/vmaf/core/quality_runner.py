@@ -288,8 +288,12 @@ class VmafQualityRunnerModelMixin(object):
             model_filepath = self.optional_dict['model_filepath']
         else:
             model_filepath = self.DEFAULT_MODEL_FILEPATH
+        if hasattr(self, '_cached_model') and self._cached_model_filepath == model_filepath:
+            return self._cached_model
         train_test_model_class = self.get_train_test_model_class()
         model = self._load_model_from_filepath(train_test_model_class, model_filepath, self.logger)
+        self._cached_model = model
+        self._cached_model_filepath = model_filepath
         return model
 
     @classmethod

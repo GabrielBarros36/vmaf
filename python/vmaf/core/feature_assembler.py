@@ -86,20 +86,24 @@ class FeatureAssembler(object):
         result_dicts = list(map(lambda x: dict(), self.assets))
         for fextractor_type in self.feature_dict:
             assert fextractor_type in self.type2results_dict
+            # Cache wildcard-resolved key mappings: scores_key -> resolved key
+            wildcard_cache = {}
             for atom_feature in self._get_atom_features(fextractor_type):
                 scores_key = self._get_scores_key(fextractor_type, atom_feature)
                 for result_index, result in enumerate(self.type2results_dict[fextractor_type]):
-                    try:
+                    if scores_key in result.result_dict:
                         result_dicts[result_index][scores_key] = result[scores_key]
-                    except KeyError:
-                        # Determine scores keys from other features. These need to be discarded when wildcard-querying
-                        # for all scores keys pertinent to a particular atom feature.
-                        other_scores_keys = [self._get_scores_key(fextractor_type, other_atom_feature)
-                                             for other_atom_feature in self._get_atom_features(fextractor_type)
-                                             if other_atom_feature is not atom_feature]
-                        scores_key_alt = BasicResult.scores_key_wildcard_match(result.result_dict, scores_key,
-                                                                               excluded_scores_keys=other_scores_keys)
-                        result_dicts[result_index][scores_key] = result[scores_key_alt]
+                    else:
+                        if scores_key not in wildcard_cache:
+                            # Determine scores keys from other features. These need to be discarded when wildcard-querying
+                            # for all scores keys pertinent to a particular atom feature.
+                            other_scores_keys = [self._get_scores_key(fextractor_type, other_atom_feature)
+                                                 for other_atom_feature in self._get_atom_features(fextractor_type)
+                                                 if other_atom_feature is not atom_feature]
+                            wildcard_cache[scores_key] = BasicResult.scores_key_wildcard_match(
+                                result.result_dict, scores_key,
+                                excluded_scores_keys=other_scores_keys)
+                        result_dicts[result_index][scores_key] = result[wildcard_cache[scores_key]]
         return result_dicts
 
     def remove_results(self):

@@ -63,15 +63,17 @@ class FeatureExtractor(Executor):
 
         atom_feature_scores_dict = {}
         atom_feature_idx_dict = {}
+        compiled_patterns = {}
         for atom_feature in self.ATOM_FEATURES:
             atom_feature_scores_dict[atom_feature] = []
             atom_feature_idx_dict[atom_feature] = 0
+            compiled_patterns[atom_feature] = re.compile(
+                "{af}: ([0-9]+) ([a-zA-Z0-9.-]+)".format(af=atom_feature))
 
         with open(log_file_path, 'rt') as log_file:
             for line in log_file.readlines():
                 for atom_feature in self.ATOM_FEATURES:
-                    re_template = "{af}: ([0-9]+) ([a-zA-Z0-9.-]+)".format(af=atom_feature)
-                    mo = re.match(re_template, line)
+                    mo = compiled_patterns[atom_feature].match(line)
                     if mo:
 
                         cur_idx = int(mo.group(1))
