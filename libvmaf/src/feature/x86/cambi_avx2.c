@@ -141,6 +141,11 @@ void cambi_decimate_shift_avx2(const uint16_t *src, uint16_t *dst, ptrdiff_t src
     }
 }
 
+int cambi_mask_block_zero_avx2(const uint16_t *mask_block) {
+    __m256i m = _mm256_loadu_si256((const __m256i *)mask_block);
+    return _mm256_testz_si256(m, m);
+}
+
 void get_derivative_data_for_row_avx2(const uint16_t *image_data, uint16_t *derivative_buffer, int width, int height, int row, int stride) {
     // For the last row, we only compute horizontal derivatives
     if (row == height - 1) {

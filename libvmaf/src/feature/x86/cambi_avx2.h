@@ -30,6 +30,8 @@ void get_derivative_data_for_row_avx2(const uint16_t *image_data, uint16_t *deri
 
 void cambi_filter_mode_avx2(uint16_t *data, ptrdiff_t stride, int width, int height, uint16_t *buffer);
 
+int cambi_mask_block_zero_avx2(const uint16_t *mask_block);
+
 void cambi_decimate_shift_avx2(const uint16_t *src, uint16_t *dst, ptrdiff_t src_stride,
                                 ptrdiff_t dst_stride, unsigned width, unsigned height,
                                 int shift_factor, int rounding_offset);

@@ -936,10 +936,31 @@ static FORCE_INLINE void calculate_c_values_row(float *c_values, uint16_t *histo
                                                        uint16_t *mask, int row, int width, ptrdiff_t stride,
                                                        const uint16_t num_diffs, const uint16_t *tvi_for_diff,
                                                        const int *diff_weights, const int *all_diffs) {
-    for (int col = 0; col < width; col++) {
-        if (mask[row * stride + col]) {
-            c_values[row * width + col] = c_value_pixel(
-                histograms, image[row * stride + col] + num_diffs, diff_weights, all_diffs, num_diffs, tvi_for_diff, col, width
+    uint16_t *mask_row = mask + row * stride;
+    uint16_t *image_row = image + row * stride;
+    float *c_row = c_values + row * width;
+    int col = 0;
+
+#if ARCH_X86
+    if (vmaf_get_cpu_flags() & VMAF_X86_CPU_FLAG_AVX2) {
+        for (; col + 15 < width; col += 16) {
+            if (cambi_mask_block_zero_avx2(&mask_row[col]))
+                continue;
+            for (int k = col; k < col + 16; k++) {
+                if (mask_row[k]) {
+                    c_row[k] = c_value_pixel(
+                        histograms, image_row[k] + num_diffs, diff_weights, all_diffs, num_diffs, tvi_for_diff, k, width
+                    );
+                }
+            }
+        }
+    }
+#endif
+
+    for (; col < width; col++) {
+        if (mask_row[col]) {
+            c_row[col] = c_value_pixel(
+                histograms, image_row[col] + num_diffs, diff_weights, all_diffs, num_diffs, tvi_for_diff, col, width
             );
         }
     }
