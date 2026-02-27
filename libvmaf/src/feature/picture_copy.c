@@ -20,9 +20,25 @@
 
 #include <libvmaf/picture.h>
 
+#include "cpu.h"
+
+#if ARCH_X86
+#include "x86/picture_copy_avx2.h"
+#endif
+
 void picture_copy_hbd(float *dst, ptrdiff_t dst_stride,
                       VmafPicture *src, int offset, float scaler)
 {
+#if ARCH_X86
+    unsigned flags = vmaf_get_cpu_flags();
+    if (flags & VMAF_X86_CPU_FLAG_AVX2) {
+        picture_copy_hbd_avx2(dst, dst_stride,
+                              (const uint16_t *)src->data[0], src->stride[0],
+                              offset, 1.0f / scaler,
+                              src->w[0], src->h[0]);
+        return;
+    }
+#endif
     float *float_data = dst;
     uint16_t *data = src->data[0];
 
@@ -49,6 +65,16 @@ void picture_copy(float *dst, ptrdiff_t dst_stride,
         picture_copy_hbd(dst, dst_stride, src, offset, 256.0f);
         return;
     }
+
+#if ARCH_X86
+    unsigned flags = vmaf_get_cpu_flags();
+    if (flags & VMAF_X86_CPU_FLAG_AVX2) {
+        picture_copy_8bit_avx2(dst, dst_stride,
+                               (const uint8_t *)src->data[0], src->stride[0],
+                               offset, src->w[0], src->h[0]);
+        return;
+    }
+#endif
 
     float *float_data = dst;
     uint8_t *data = src->data[0];
