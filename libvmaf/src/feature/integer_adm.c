@@ -1022,6 +1022,17 @@ static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
         bottom = h;
     }
 
+
+#if ARCH_X86
+    {
+        unsigned flags = vmaf_get_cpu_flags();
+        if (flags & VMAF_X86_CPU_FLAG_AVX2) {
+            adm_csf_s0_avx2(buf, w, h, stride, i_rfactor, i_shifts, i_shiftsadd);
+            return;
+        }
+    }
+#endif
+
     for (int theta = 0; theta < 3; ++theta) {
         const int16_t *src_ptr = src_angles[theta];
         int16_t *dst_ptr = dst_angles[theta];
