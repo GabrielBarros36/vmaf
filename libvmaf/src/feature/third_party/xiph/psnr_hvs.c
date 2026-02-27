@@ -31,11 +31,18 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdint.h>
 #include <string.h>
 
+#include "cpu.h"
 #include "feature_collector.h"
 #include "feature_extractor.h"
 #include "log.h"
 
+#if ARCH_X86
+#include "x86/psnr_hvs_avx2.h"
+#endif
+
 typedef int32_t od_coeff;
+
+typedef void (*od_bin_fdct8x8_func)(od_coeff *y, int ystride, const od_coeff *x, int xstride);
 
 #define OD_DCT_OVERFLOW_CHECK(val, scale, offset, idx)
 
@@ -242,7 +249,8 @@ static double calc_psnrhvs(const unsigned char *_src, int _systride,
                            const unsigned char *_dst, int _dystride,
                            double _par, int depth, int _w, int _h, int _step,
                            float _csf[8][8],
-                           const float _mask[8][8])
+                           const float _mask[8][8],
+                           od_bin_fdct8x8_func fdct8x8)
 {
     float ret;
     od_coeff dct_s[8 * 8];
@@ -321,8 +329,8 @@ static double calc_psnrhvs(const unsigned char *_src, int _systride,
             if (d_gvar > 0)
                 d_gvar =
                     (d_vars[0] + d_vars[1] + d_vars[2] + d_vars[3]) / d_gvar;
-            od_bin_fdct8x8(dct_s, 8, dct_s, 8);
-            od_bin_fdct8x8(dct_d, 8, dct_d, 8);
+            fdct8x8(dct_s, 8, dct_s, 8);
+            fdct8x8(dct_d, 8, dct_d, 8);
             for (i = 0; i < 8; i++)
                 for (j = (i == 0); j < 8; j++)
                     s_mask += dct_s[i * 8 + j] * dct_s[i * 8 + j] * _mask[i][j];
@@ -394,6 +402,13 @@ static int extract(VmafFeatureExtractor *fex, VmafPicture *ref_pic,
         mask_y, mask_cb420, mask_cr420
     };
 
+    od_bin_fdct8x8_func fdct8x8 = od_bin_fdct8x8;
+#if ARCH_X86
+    unsigned flags = vmaf_get_cpu_flags();
+    if (flags & VMAF_X86_CPU_FLAG_AVX2)
+        fdct8x8 = od_bin_fdct8x8_avx2;
+#endif
+
     double score[3];
     for (unsigned i = 0; i < 3; i++) {
         score[i] =
@@ -401,7 +416,7 @@ static int extract(VmafFeatureExtractor *fex, VmafPicture *ref_pic,
                          dist_pic->data[i], dist_pic->stride[i], 1.0,
                          ref_pic->bpc, ref_pic->w[i], ref_pic->h[i], 7,
                          i == 0 ? csf_y : i == 1 ? csf_cb420 : csf_cr420,
-                         mask_tables[i]);
+                         mask_tables[i], fdct8x8);
 
         err |= vmaf_feature_collector_append(feature_collector,
                                              fex->provided_features[i],
