@@ -166,10 +166,16 @@ sed 's/^/    /' "$RESULT_DIR/env.txt"
 # STEP 3 — Sync changes and rebuild (optional)
 # =============================================================================
 if [[ $SYNC -eq 1 ]]; then
-    log "Step 3/7 — Syncing libvmaf/src/ to instance..."
+    log "Step 3/7 — Syncing libvmaf/ sources to instance..."
     rsync -a --delete -e "ssh $SSH_OPTS" \
         "$REPO_ROOT/libvmaf/src/" \
         "${REMOTE_USER}@${IP}:${REMOTE_ROOT}/libvmaf/src/"
+    rsync -a --delete --rsync-path="sudo rsync" -e "ssh $SSH_OPTS" \
+        "$REPO_ROOT/libvmaf/test/" \
+        "${REMOTE_USER}@${IP}:${REMOTE_ROOT}/libvmaf/test/"
+    rsync -a --rsync-path="sudo rsync" -e "ssh $SSH_OPTS" \
+        "$REPO_ROOT/libvmaf/meson.build" \
+        "${REMOTE_USER}@${IP}:${REMOTE_ROOT}/libvmaf/meson.build"
 
     log "  Rebuilding release binary..."
     remote sudo bash << 'REBUILD'
