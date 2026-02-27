@@ -91,6 +91,10 @@ typedef struct CambiBuffers {
 
 typedef void (*VmafRangeUpdater)(uint16_t *arr, int left, int right);
 typedef void (*VmafDerivativeCalculator)(const uint16_t *image_data, uint16_t *derivative_buffer, int width, int height, int row, int stride);
+typedef void (*VmafFilterMode)(uint16_t *data, ptrdiff_t stride, int width, int height, uint16_t *buffer);
+typedef void (*VmafDecimateShift)(const uint16_t *src, uint16_t *dst, ptrdiff_t src_stride,
+                                  ptrdiff_t dst_stride, unsigned width, unsigned height,
+                                  int shift_factor, int rounding_offset);
 
 typedef struct CambiState {
     VmafPicture pics[PICS_BUFFER_SIZE];
@@ -111,6 +115,8 @@ typedef struct CambiState {
     VmafRangeUpdater inc_range_callback;
     VmafRangeUpdater dec_range_callback;
     VmafDerivativeCalculator derivative_callback;
+    VmafFilterMode filter_mode_callback;
+    VmafDecimateShift decimate_shift_callback;
     CambiBuffers buffers;
 } CambiState;
 
@@ -340,6 +346,8 @@ static void get_derivative_data_for_row(const uint16_t *image_data, uint16_t *de
     #define PATH_SEPARATOR '/'
 #endif
 
+static void filter_mode_c(uint16_t *data, ptrdiff_t stride, int width, int height, uint16_t *buffer);
+
 static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
                 unsigned bpc, unsigned w, unsigned h) {
     (void)pix_fmt;
@@ -445,6 +453,8 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     s->inc_range_callback = increment_range;
     s->dec_range_callback = decrement_range;
     s->derivative_callback = get_derivative_data_for_row;
+    s->filter_mode_callback = filter_mode_c;
+    s->decimate_shift_callback = NULL;
 
 #if ARCH_X86
     unsigned flags = vmaf_get_cpu_flags();
@@ -452,6 +462,8 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
         s->inc_range_callback = cambi_increment_range_avx2;
         s->dec_range_callback = cambi_decrement_range_avx2;
         s->derivative_callback = get_derivative_data_for_row_avx2;
+        s->filter_mode_callback = cambi_filter_mode_avx2;
+        s->decimate_shift_callback = cambi_decimate_shift_avx2;
     }
 #endif
 
@@ -539,7 +551,8 @@ static void decimate_generic_9b_and_convert_to_10b(const VmafPicture *pic, VmafP
 }
 
 // For bitdepths >= 10.
-static void decimate_generic_uint16_and_convert_to_10b(const VmafPicture *pic, VmafPicture *out_pic, unsigned out_w, unsigned out_h) {
+static void decimate_generic_uint16_and_convert_to_10b(const VmafPicture *pic, VmafPicture *out_pic, unsigned out_w, unsigned out_h,
+                                                        VmafDecimateShift decimate_shift_callback) {
     uint16_t *data = pic->data[0];
     uint16_t *out_data = out_pic->data[0];
     ptrdiff_t stride = pic->stride[0] >> 1;
@@ -555,6 +568,10 @@ static void decimate_generic_uint16_and_convert_to_10b(const VmafPicture *pic, V
         if (pic->bpc == 10) {
             // memcpy is faster in case the original bitdepth is already 10
             memcpy(out_data, data, stride * pic->h[0] * sizeof(uint16_t));
+        }
+        else if (decimate_shift_callback) {
+            decimate_shift_callback(data, out_data, stride, out_stride, out_w, out_h,
+                                    shift_factor, rounding_offset);
         }
         else {
             for (unsigned i = 0; i < out_h; i++) {
@@ -663,12 +680,13 @@ static int validate_image(const VmafPicture *pic) {
     }
 }
 
-static int cambi_preprocessing(const VmafPicture *image, VmafPicture *preprocessed, int width, int height, int enc_bitdepth) {
+static int cambi_preprocessing(const VmafPicture *image, VmafPicture *preprocessed, int width, int height, int enc_bitdepth,
+                                VmafDecimateShift decimate_shift_callback) {
     if (validate_image(image)) {
         return -EINVAL;
     }
     if (image->bpc >= 10) {
-        decimate_generic_uint16_and_convert_to_10b(image, preprocessed, width, height);
+        decimate_generic_uint16_and_convert_to_10b(image, preprocessed, width, height, decimate_shift_callback);
     }
     else {
         if (image->bpc <= 8) {
@@ -708,9 +726,7 @@ static inline uint16_t mode3(uint16_t a, uint16_t b, uint16_t c) {
     return min3(a, b, c);
 }
 
-static void filter_mode(const VmafPicture *image, int width, int height, uint16_t *buffer) {
-    uint16_t *data = image->data[0];
-    ptrdiff_t stride = image->stride[0] >> 1;
+static void filter_mode_c(uint16_t *data, ptrdiff_t stride, int width, int height, uint16_t *buffer) {
     int curr_line = 0;
     for (int i = 0; i < height; i++) {
         buffer[curr_line * width + 0] = data[i * stride + 0];
@@ -1094,7 +1110,8 @@ static int dump_c_values(FILE *heatmaps_files[], const float *c_values, int widt
 static int cambi_score(VmafPicture *pics, uint16_t window_size, double topk,
                        const uint16_t num_diffs, const uint16_t *tvi_for_diff,
                        CambiBuffers buffers, VmafRangeUpdater inc_range_callback, VmafRangeUpdater dec_range_callback,
-                       VmafDerivativeCalculator derivative_callback, double *score, bool write_heatmaps, FILE *heatmaps_files[],
+                       VmafDerivativeCalculator derivative_callback, VmafFilterMode filter_mode_callback,
+                       double *score, bool write_heatmaps, FILE *heatmaps_files[],
                        int width, int height, int frame) {
     double scores_per_scale[NUM_SCALES];
     VmafPicture *image = &pics[0];
@@ -1112,7 +1129,11 @@ static int cambi_score(VmafPicture *pics, uint16_t window_size, double topk,
             decimate(mask, scaled_width, scaled_height);
         }
 
-        filter_mode(image, scaled_width, scaled_height, buffers.filter_mode_buffer);
+        {
+            uint16_t *img_data = image->data[0];
+            ptrdiff_t img_stride = image->stride[0] >> 1;
+            filter_mode_callback(img_data, img_stride, scaled_width, scaled_height, buffers.filter_mode_buffer);
+        }
 
         calculate_c_values(image, mask, buffers.c_values, buffers.c_values_histograms, window_size,
                            num_diffs, tvi_for_diff, buffers.diff_weights, buffers.all_diffs, scaled_width, scaled_height,
@@ -1139,12 +1160,14 @@ static int preprocess_and_extract_cambi(CambiState *s, VmafPicture *pic, double 
     int window_size = is_src ? s->src_window_size : s->window_size;
     int num_diffs = 1 << s->max_log_contrast;
 
-    int err = cambi_preprocessing(pic, &s->pics[0], width, height, s->enc_bitdepth);
+    int err = cambi_preprocessing(pic, &s->pics[0], width, height, s->enc_bitdepth,
+                                    s->decimate_shift_callback);
     if (err) return err;
 
     bool write_heatmaps = s->heatmaps_path && !is_src;
     err = cambi_score(s->pics, window_size, s->topk, num_diffs, s->buffers.tvi_for_diff,
-                      s->buffers, s->inc_range_callback, s->dec_range_callback, s->derivative_callback, score, write_heatmaps, s->heatmaps_files, width, height, frame);
+                      s->buffers, s->inc_range_callback, s->dec_range_callback, s->derivative_callback,
+                      s->filter_mode_callback, score, write_heatmaps, s->heatmaps_files, width, height, frame);
     if (err) return err;
 
     return 0;

@@ -192,7 +192,7 @@ static char *test_decimate_generic()
     mu_assert("test_decimate_generic alloc #2 error", !err);
 
     pic.bpc = 10;
-    decimate_generic_uint16_and_convert_to_10b(&pic, &out_pic, out_pic.w[0], out_pic.h[0]);
+    decimate_generic_uint16_and_convert_to_10b(&pic, &out_pic, out_pic.w[0], out_pic.h[0], NULL);
 
     uint16_t *data = out_pic.data[0];
     ptrdiff_t stride = out_pic.stride[0] >> 1;
@@ -203,7 +203,7 @@ static char *test_decimate_generic()
     mu_assert("decimate generic 10b wrong pixel value (1,1)", data[1+stride]==100);
 
     pic.bpc = 16;
-    decimate_generic_uint16_and_convert_to_10b(&pic, &out_pic, out_pic.w[0], out_pic.h[0]);
+    decimate_generic_uint16_and_convert_to_10b(&pic, &out_pic, out_pic.w[0], out_pic.h[0], NULL);
 
     mu_assert("decimate generic 16b wrong pixel value (0,0)", data[0]==0);
     mu_assert("decimate generic 16b wrong pixel value (0,1)", data[1]==2);
@@ -211,7 +211,7 @@ static char *test_decimate_generic()
     mu_assert("decimate generic 16b wrong pixel value (1,1)", data[1+stride]==2);
 
     pic.bpc = 12;
-    decimate_generic_uint16_and_convert_to_10b(&pic, &out_pic, out_pic.w[0], out_pic.h[0]);
+    decimate_generic_uint16_and_convert_to_10b(&pic, &out_pic, out_pic.w[0], out_pic.h[0], NULL);
 
     mu_assert("decimate generic 12b wrong pixel value (0,0)", data[0]==1);
     mu_assert("decimate generic 12b wrong pixel value (0,1)", data[1]==25);
@@ -231,7 +231,7 @@ static char *test_decimate_generic()
     mu_assert("test_decimate_generic alloc #3 error", !err);
 
     pic.bpc = 10;
-    decimate_generic_uint16_and_convert_to_10b(&pic, &out_pic_4x4, out_pic_4x4.w[0], out_pic_4x4.h[0]);
+    decimate_generic_uint16_and_convert_to_10b(&pic, &out_pic_4x4, out_pic_4x4.w[0], out_pic_4x4.h[0], NULL);
 
     mu_assert("decimate generic 10b wrong for same dimensions", pic_data_equality(&pic, &out_pic_4x4));
 
@@ -274,12 +274,12 @@ static char *test_filter_mode()
     data[1 * stride + 2] = 1; data[2 * stride + 2] = 1;
     data[1 * stride + 3] = 1; data[3 * stride + 3] = 1;
     memcpy(filtered_data, data, stride * h * sizeof(uint16_t));
-    filter_mode(&filtered_image, w, h, buffer);
+    filter_mode_c(filtered_image.data[0], filtered_image.stride[0]>>1, w, h, buffer);
     mu_assert("filter_mode: all zeros", data_pic_sum(&filtered_image)==0);
 
     data[3 * stride + 4] = 1;
     memcpy(filtered_data, data, stride * h * sizeof(uint16_t));
-    filter_mode(&filtered_image, w, h, buffer);
+    filter_mode_c(filtered_image.data[0], filtered_image.stride[0]>>1, w, h, buffer);
 
     mu_assert("filter_mode: one one sum check", data_pic_sum(&filtered_image)==1);
     mu_assert("filter_mode: zero (3,3) check", filtered_data[3 * output_stride + 3]==0);
@@ -288,15 +288,15 @@ static char *test_filter_mode()
     data[0 * stride + 0] = 2;
     data[0 * stride + 1] = 1;
     memcpy(filtered_data, data, stride * h * sizeof(uint16_t));
-    filter_mode(&filtered_image, w, h, buffer);
+    filter_mode_c(filtered_image.data[0], filtered_image.stride[0]>>1, w, h, buffer);
     mu_assert("filter_mode: two in the corner check", filtered_data[0 * output_stride + 0]==2);
     data[1 * stride + 0] = 1;
     memcpy(filtered_data, data, stride * h * sizeof(uint16_t));
-    filter_mode(&filtered_image, w, h, buffer);
+    filter_mode_c(filtered_image.data[0], filtered_image.stride[0]>>1, w, h, buffer);
     mu_assert("filter_mode: two in the corner and adjacent one check", filtered_data[0 * output_stride + 1]==1);
     data[2 * stride + 0] = 2;
     memcpy(filtered_data, data, stride * h * sizeof(uint16_t));
-    filter_mode(&filtered_image, w, h, buffer);
+    filter_mode_c(filtered_image.data[0], filtered_image.stride[0]>>1, w, h, buffer);
     mu_assert("filter_mode: two in corner and edge check", filtered_data[1 * output_stride + 0]==2);
 
     vmaf_picture_unref(&image);

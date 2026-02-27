@@ -28,4 +28,10 @@ void cambi_decrement_range_avx2(uint16_t *arr, int left, int right);
 
 void get_derivative_data_for_row_avx2(const uint16_t *image_data, uint16_t *derivative_buffer, int width, int height, int row, int stride);
 
+void cambi_filter_mode_avx2(uint16_t *data, ptrdiff_t stride, int width, int height, uint16_t *buffer);
+
+void cambi_decimate_shift_avx2(const uint16_t *src, uint16_t *dst, ptrdiff_t src_stride,
+                                ptrdiff_t dst_stride, unsigned width, unsigned height,
+                                int shift_factor, int rounding_offset);
+
 #endif /* X86_AVX2_CAMBI_H_ */
