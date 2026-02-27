@@ -200,43 +200,59 @@ static float csf_cr420[8][8] = {
     {0.593906509971, 0.802254508198, 0.706020324706, 0.587716619023, 0.478717061273, 0.393021669543, 0.330555063063, 0.285345396658}
 };
 
+/*
+Precomputed masking tables: mask[x][y] = (csf[x][y] * 0.3885746225901003)^2
+These are derived from the CSF matrices above and the normalization constant
+described in the PSNR-HVS-M paper (see comment in calc_psnrhvs).
+*/
+static const float mask_y[8][8] = {
+    {3.959590793e-01, 7.919181585e-01, 6.564499736e-01, 3.323672116e-01, 1.516780555e-01, 6.946861744e-02, 3.282009438e-02, 1.609680057e-02},
+    {7.919181585e-01, 5.701537132e-01, 6.332561374e-01, 4.298720062e-01, 2.286436856e-01, 1.140010282e-01, 5.670226365e-02, 2.875609510e-02},
+    {6.564499736e-01, 6.332561374e-01, 2.724511027e-01, 1.800690144e-01, 1.157998443e-01, 6.795828044e-02, 3.800951689e-02, 2.095131949e-02},
+    {3.323672116e-01, 4.298720062e-01, 1.800690144e-01, 9.017898887e-02, 5.538252369e-02, 3.523808345e-02, 2.185229771e-02, 1.320897043e-02},
+    {1.516780555e-01, 2.286436856e-01, 1.157998443e-01, 5.538252369e-02, 3.043927439e-02, 1.880294085e-02, 1.209325530e-02, 7.777041290e-03},
+    {6.946861744e-02, 1.140010282e-01, 6.795828044e-02, 3.523808345e-02, 1.880294085e-02, 1.103335526e-02, 6.980675273e-03, 4.575620405e-03},
+    {3.282009438e-02, 5.670226365e-02, 3.800951689e-02, 2.185229771e-02, 1.209325530e-02, 6.980675273e-03, 4.305776674e-03, 2.799041104e-03},
+    {1.609680057e-02, 2.875609510e-02, 2.095131949e-02, 1.320897043e-02, 7.777041290e-03, 4.575620405e-03, 2.799041104e-03, 1.796675962e-03},
+};
+
+static const float mask_cb420[8][8] = {
+    {5.514800549e-01, 9.142838120e-01, 2.112527043e-01, 1.996240616e-01, 1.665208936e-01, 1.217642426e-01, 8.431119472e-02, 5.712788925e-02},
+    {9.142838120e-01, 3.794617355e-01, 2.223940939e-01, 2.883382738e-01, 2.674891651e-01, 2.082074583e-01, 1.499063671e-01, 1.042404696e-01},
+    {2.112527043e-01, 2.223940939e-01, 1.446302384e-01, 1.590197533e-01, 1.606373191e-01, 1.391700953e-01, 1.090451255e-01, 8.073214442e-02},
+    {1.996240616e-01, 2.883382738e-01, 1.590197533e-01, 1.120148078e-01, 9.707420319e-02, 8.525791764e-02, 7.093085349e-02, 5.594328418e-02},
+    {1.665208936e-01, 2.674891651e-01, 1.606373191e-01, 9.707420319e-02, 6.911235303e-02, 5.535817519e-02, 4.567789659e-02, 3.711674362e-02},
+    {1.217642426e-01, 2.082074583e-01, 1.391700953e-01, 8.525791764e-02, 5.535817519e-02, 3.999576718e-02, 3.116998449e-02, 2.501756512e-02},
+    {8.431119472e-02, 1.499063671e-01, 1.090451255e-01, 7.093085349e-02, 4.567789659e-02, 3.116998449e-02, 2.287559584e-02, 1.769700088e-02},
+    {5.712788925e-02, 1.042404696e-01, 8.073214442e-02, 5.594328418e-02, 3.711674362e-02, 2.501756512e-02, 1.769700088e-02, 1.318723708e-02},
+};
+
+static const float mask_cr420[8][8] = {
+    {6.275725961e-01, 1.040435672e+00, 2.404010892e-01, 1.861014068e-01, 1.552406698e-01, 1.135158613e-01, 7.859991491e-02, 5.325802416e-02},
+    {1.040435672e+00, 4.318193793e-01, 2.073290199e-01, 2.688060999e-01, 2.493693084e-01, 1.941033453e-01, 1.397516429e-01, 9.717917442e-02},
+    {2.404010892e-01, 2.073290199e-01, 1.348329037e-01, 1.482476443e-01, 1.497556716e-01, 1.297426671e-01, 1.016583592e-01, 7.526329905e-02},
+    {1.861014068e-01, 2.688060999e-01, 1.482476443e-01, 1.044268534e-01, 9.049835801e-02, 7.948249578e-02, 6.612595916e-02, 5.215366557e-02},
+    {1.552406698e-01, 2.493693084e-01, 1.497556716e-01, 9.049835801e-02, 6.443063915e-02, 5.160817876e-02, 4.258364439e-02, 3.460243717e-02},
+    {1.135158613e-01, 1.941033453e-01, 1.297426671e-01, 7.948249578e-02, 5.160817876e-02, 3.728644177e-02, 2.905851230e-02, 2.332286350e-02},
+    {7.859991491e-02, 1.397516429e-01, 1.016583592e-01, 6.612595916e-02, 4.258364439e-02, 2.905851230e-02, 2.132599056e-02, 1.649819687e-02},
+    {5.325802416e-02, 9.717917442e-02, 7.526329905e-02, 5.215366557e-02, 3.460243717e-02, 2.332286350e-02, 1.649819687e-02, 1.229392737e-02},
+};
+
 static double calc_psnrhvs(const unsigned char *_src, int _systride,
                            const unsigned char *_dst, int _dystride,
                            double _par, int depth, int _w, int _h, int _step,
-                           float _csf[8][8])
+                           float _csf[8][8],
+                           const float _mask[8][8])
 {
     float ret;
     od_coeff dct_s[8 * 8];
     od_coeff dct_d[8 * 8];
-    float mask[8][8];
     int pixels;
     int x;
     int y;
     int32_t samplemax;
     (void)_par;
     ret = pixels = 0;
-    /*
-     In the PSNR-HVS-M paper[1] the authors describe the construction of
-     their masking table as "we have used the quantization table for the
-     color component Y of JPEG [6] that has been also obtained on the
-     basis of CSF. Note that the values in quantization table JPEG have
-     been normalized and then squared." Their CSF matrix (from PSNR-HVS)
-     was also constructed from the JPEG matrices. I can not find any obvious
-     scheme of normalizing to produce their table, but if I multiply their
-     CSF by 0.38857 and square the result I get their masking table.
-     I have no idea where this constant comes from, but deviating from it
-     too greatly hurts MOS agreement.
-
-     [1] Nikolay Ponomarenko, Flavia Silvestri, Karen Egiazarian, Marco Carli,
-     Jaakko Astola, Vladimir Lukin, "On between-coefficient contrast masking
-     of DCT basis functions", CD-ROM Proceedings of the Third International
-     Workshop on Video Processing and Quality Metrics for Consumer
-     Electronics VPQM-07, Scottsdale, Arizona, USA, 25-26 January, 2007, 4p.
-    */
-    for (x = 0; x < 8; x++)
-        for (y = 0; y < 8; y++)
-            mask[x][y] = (_csf[x][y] * 0.3885746225901003) *
-                         (_csf[x][y] * 0.3885746225901003);
 
     for (y = 0; y < _h - 7; y += _step) {
         for (x = 0; x < _w - 7; x += _step) {
@@ -309,10 +325,10 @@ static double calc_psnrhvs(const unsigned char *_src, int _systride,
             od_bin_fdct8x8(dct_d, 8, dct_d, 8);
             for (i = 0; i < 8; i++)
                 for (j = (i == 0); j < 8; j++)
-                    s_mask += dct_s[i * 8 + j] * dct_s[i * 8 + j] * mask[i][j];
+                    s_mask += dct_s[i * 8 + j] * dct_s[i * 8 + j] * _mask[i][j];
             for (i = 0; i < 8; i++)
                 for (j = (i == 0); j < 8; j++)
-                    d_mask += dct_d[i * 8 + j] * dct_d[i * 8 + j] * mask[i][j];
+                    d_mask += dct_d[i * 8 + j] * dct_d[i * 8 + j] * _mask[i][j];
             s_mask = sqrt(s_mask * s_gvar) / 32.f;
             d_mask = sqrt(d_mask * d_gvar) / 32.f;
             if (d_mask > s_mask)
@@ -322,9 +338,9 @@ static double calc_psnrhvs(const unsigned char *_src, int _systride,
                     float err;
                     err = abs(dct_s[i * 8 + j] - dct_d[i * 8 + j]);
                     if (i != 0 || j != 0)
-                        err = err < s_mask / mask[i][j]
+                        err = err < s_mask / _mask[i][j]
                                   ? 0
-                                  : err - s_mask / mask[i][j];
+                                  : err - s_mask / _mask[i][j];
                     ret += (err * _csf[i][j]) * (err * _csf[i][j]);
                     pixels++;
                 }
@@ -374,13 +390,18 @@ static int extract(VmafFeatureExtractor *fex, VmafPicture *ref_pic,
     (void)ref_pic_90;
     (void)dist_pic_90;
 
+    static const float (*const mask_tables[])[8] = {
+        mask_y, mask_cb420, mask_cr420
+    };
+
     double score[3];
     for (unsigned i = 0; i < 3; i++) {
         score[i] =
             calc_psnrhvs(ref_pic->data[i], ref_pic->stride[i],
                          dist_pic->data[i], dist_pic->stride[i], 1.0,
                          ref_pic->bpc, ref_pic->w[i], ref_pic->h[i], 7,
-                         i == 0 ? csf_y : i == 1 ? csf_cb420 : csf_cr420);
+                         i == 0 ? csf_y : i == 1 ? csf_cb420 : csf_cr420,
+                         mask_tables[i]);
 
         err |= vmaf_feature_collector_append(feature_collector,
                                              fex->provided_features[i],
