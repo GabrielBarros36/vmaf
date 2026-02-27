@@ -39,6 +39,7 @@ typedef struct VmafFrameSyncBuf {
 
 typedef struct VmafFrameSyncContext {
     VmafFrameSyncBuf *buf_que;
+    VmafFrameSyncBuf *free_head;
     pthread_mutex_t acquire_lock;
     pthread_mutex_t retrieve_lock;
     pthread_cond_t retrieve;
@@ -63,6 +64,8 @@ int vmaf_framesync_init(VmafFrameSyncContext **fs_ctx)
     buf_que->index = -1;
     buf_que->next  = NULL;
 
+    ctx->free_head = buf_que;
+
     return 0;
 }
 
@@ -74,19 +77,30 @@ int vmaf_framesync_acquire_new_buf(VmafFrameSyncContext *fs_ctx, void **data,
 
     pthread_mutex_lock(&(fs_ctx->acquire_lock));
 
-    // traverse until a free buffer is found
-    for (unsigned i = 0; i < fs_ctx->buf_cnt; i++) {
-        if (buf_que->buf_status == BUF_FREE) {
-            buf_que->frame_data = *data = malloc(data_sz);
-            if (!buf_que->frame_data)
-                return -ENOMEM;
-            buf_que->buf_status = BUF_ACQUIRED;
-            buf_que->index = index;
-            break;
+    // check free_head hint first for O(1) acquire
+    if (fs_ctx->free_head && fs_ctx->free_head->buf_status == BUF_FREE) {
+        VmafFrameSyncBuf *buf = fs_ctx->free_head;
+        buf->frame_data = *data = malloc(data_sz);
+        if (!buf->frame_data)
+            return -ENOMEM;
+        buf->buf_status = BUF_ACQUIRED;
+        buf->index = index;
+        fs_ctx->free_head = NULL;
+    } else {
+        // traverse until a free buffer is found
+        for (unsigned i = 0; i < fs_ctx->buf_cnt; i++) {
+            if (buf_que->buf_status == BUF_FREE) {
+                buf_que->frame_data = *data = malloc(data_sz);
+                if (!buf_que->frame_data)
+                    return -ENOMEM;
+                buf_que->buf_status = BUF_ACQUIRED;
+                buf_que->index = index;
+                break;
+            }
+            // move to next node
+            if (buf_que->next != NULL)
+                buf_que = buf_que->next;
         }
-        // move to next node
-        if (buf_que->next != NULL)
-            buf_que = buf_que->next;
     }
 
     // create a new node if all nodes are occupied in the list and append to the tail
@@ -183,6 +197,7 @@ int vmaf_framesync_release_buf(VmafFrameSyncContext *fs_ctx, void *data,
             buf_que->frame_data = NULL;
             buf_que->buf_status = BUF_FREE;
             buf_que->index = -1;
+            fs_ctx->free_head = buf_que;
             break;
         }
 
