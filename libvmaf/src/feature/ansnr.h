@@ -19,3 +19,8 @@
 int compute_ansnr(const float *ref, const float *dis, int w, int h,
         int ref_stride, int dis_stride,
         double *score, double *score_psnr, double peak, double psnr_max);
+
+int compute_ansnr_with_buf(const float *ref, const float *dis, int w, int h,
+        int ref_stride, int dis_stride,
+        double *score, double *score_psnr, double peak, double psnr_max,
+        float *data_buf, size_t buf_sz_one);

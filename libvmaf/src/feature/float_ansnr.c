@@ -32,6 +32,8 @@ typedef struct AnsnrState {
     float *dist;
     double peak;
     double psnr_max;
+    float *work_buf;
+    size_t work_buf_sz_one;
 } AnsnrState;
 
 static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
@@ -45,6 +47,13 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     if (!s->ref) goto fail;
     s->dist = aligned_malloc(s->float_stride * h, 32);
     if (!s->dist) goto free_ref;
+
+    {
+        int buf_stride = ALIGN_CEIL(w * sizeof(float));
+        s->work_buf_sz_one = (size_t)buf_stride * h;
+        s->work_buf = aligned_malloc(s->work_buf_sz_one * 2, MAX_ALIGN);
+        if (!s->work_buf) goto free_dist;
+    }
 
     if (bpc == 8) {
         s->peak = 255.0;
@@ -64,8 +73,10 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
 
     return 0;
 
+    free_dist:
+    aligned_free(s->dist);
     free_ref:
-    free(s->ref);
+    aligned_free(s->ref);
     fail:
     return -ENOMEM;
 }
@@ -85,9 +96,10 @@ static int extract(VmafFeatureExtractor *fex,
     picture_copy(s->dist, s->float_stride, dist_pic, -128, dist_pic->bpc);
 
     double score, score_psnr;
-    err = compute_ansnr(s->ref, s->dist, ref_pic->w[0], ref_pic->h[0],
+    err = compute_ansnr_with_buf(s->ref, s->dist, ref_pic->w[0], ref_pic->h[0],
                         s->float_stride, s->float_stride, &score, &score_psnr,
-                        s->peak, s->psnr_max);
+                        s->peak, s->psnr_max,
+                        s->work_buf, s->work_buf_sz_one);
 
     if (err) return err;
     err = vmaf_feature_collector_append(feature_collector, "float_ansnr",
@@ -104,6 +116,7 @@ static int close(VmafFeatureExtractor *fex)
     AnsnrState *s = fex->priv;
     if (s->ref) aligned_free(s->ref);
     if (s->dist) aligned_free(s->dist);
+    if (s->work_buf) aligned_free(s->work_buf);
     return 0;
 }
 

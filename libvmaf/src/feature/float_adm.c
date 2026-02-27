@@ -31,6 +31,8 @@
 #include "mem.h"
 #include "picture_copy.h"
 
+#define NUM_BUFS_ADM_FLOAT 20
+
 typedef struct AdmState {
     size_t float_stride;
     float *ref;
@@ -41,6 +43,12 @@ typedef struct AdmState {
     int adm_ref_display_height;
     int adm_csf_mode;
     VmafDictionary *feature_name_dict;
+    float *adm_data_buf;
+    size_t adm_buf_sz_one;
+    char *adm_buf_y;
+    int adm_ind_size_y;
+    char *adm_buf_x;
+    int adm_ind_size_x;
 } AdmState;
 
 static const VmafOption options[] = {
@@ -112,6 +120,21 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     s->dist = aligned_malloc(s->float_stride * h, 32);
     if (!s->dist) goto fail;
 
+    {
+        int buf_stride = ALIGN_CEIL(((w + 1) / 2) * sizeof(float));
+        s->adm_buf_sz_one = (size_t)buf_stride * ((h + 1) / 2);
+        s->adm_data_buf = aligned_malloc(s->adm_buf_sz_one * NUM_BUFS_ADM_FLOAT, MAX_ALIGN);
+        if (!s->adm_data_buf) goto fail;
+
+        s->adm_ind_size_y = ALIGN_CEIL(((h + 1) / 2) * sizeof(int));
+        s->adm_buf_y = aligned_malloc(s->adm_ind_size_y * 4, MAX_ALIGN);
+        if (!s->adm_buf_y) goto fail;
+
+        s->adm_ind_size_x = ALIGN_CEIL(((w + 1) / 2) * sizeof(int));
+        s->adm_buf_x = aligned_malloc(s->adm_ind_size_x * 4, MAX_ALIGN);
+        if (!s->adm_buf_x) goto fail;
+    }
+
     s->feature_name_dict =
         vmaf_feature_name_dict_from_provided_features(fex->provided_features,
                 fex->options, s);
@@ -122,6 +145,9 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
 fail:
     if (s->ref) aligned_free(s->ref);
     if (s->dist) aligned_free(s->dist);
+    if (s->adm_data_buf) aligned_free(s->adm_data_buf);
+    if (s->adm_buf_y) aligned_free(s->adm_buf_y);
+    if (s->adm_buf_x) aligned_free(s->adm_buf_x);
     vmaf_dictionary_free(&s->feature_name_dict);
     return -ENOMEM;
 }
@@ -142,29 +168,28 @@ static int extract(VmafFeatureExtractor *fex,
 
     double score, score_num, score_den;
     double scores[8];
-    err = compute_adm(s->ref, s->dist, ref_pic->w[0], ref_pic->h[0],
+    err = compute_adm_with_buf(s->ref, s->dist, ref_pic->w[0], ref_pic->h[0],
                       s->float_stride, s->float_stride, &score, &score_num,
                       &score_den, scores, ADM_BORDER_FACTOR,
                       s->adm_enhn_gain_limit,
                       s->adm_norm_view_dist, s->adm_ref_display_height,
-                      s->adm_csf_mode);
+                      s->adm_csf_mode,
+                      s->adm_data_buf, s->adm_buf_sz_one,
+                      s->adm_buf_y, s->adm_ind_size_y,
+                      s->adm_buf_x, s->adm_ind_size_x);
     if (err) return err;
 
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "VMAF_feature_adm2_score", score, index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "VMAF_feature_adm_scale0_score",
             scores[0] / scores[1], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "VMAF_feature_adm_scale1_score",
             scores[2] / scores[3], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "VMAF_feature_adm_scale2_score",
             scores[4] / scores[5], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "VMAF_feature_adm_scale3_score",
             scores[6] / scores[7], index);
@@ -173,34 +198,24 @@ static int extract(VmafFeatureExtractor *fex,
 
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm", score, index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_num", score_num, index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_den", score_den, index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_num_scale0", scores[0], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_den_scale0", scores[1], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_num_scale1", scores[2], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_den_scale1", scores[3], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_num_scale2", scores[4], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_den_scale2", scores[5], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_num_scale3", scores[6], index);
-
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
             s->feature_name_dict, "adm_den_scale3", scores[7], index);
 
@@ -212,6 +227,9 @@ static int close(VmafFeatureExtractor *fex)
     AdmState *s = fex->priv;
     if (s->ref) aligned_free(s->ref);
     if (s->dist) aligned_free(s->dist);
+    if (s->adm_data_buf) aligned_free(s->adm_data_buf);
+    if (s->adm_buf_y) aligned_free(s->adm_buf_y);
+    if (s->adm_buf_x) aligned_free(s->adm_buf_x);
     vmaf_dictionary_free(&s->feature_name_dict);
     return 0;
 }
