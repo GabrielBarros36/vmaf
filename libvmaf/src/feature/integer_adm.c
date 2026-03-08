@@ -17,6 +17,7 @@
  */
 
 #include "cpu.h"
+#include "common/macros.h"
 #include "dict.h"
 #include "feature_collector.h"
 #include "feature_extractor.h"
@@ -657,7 +658,7 @@ static void dwt2_src_indices_filt(int **src_ind_y, int **src_ind_x, int w, int h
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
-static void adm_decouple(AdmBuffer *buf, int w, int h, int stride,
+static void adm_decouple(AdmBuffer *RESTRICT buf, int w, int h, int stride,
                          double adm_enhn_gain_limit)
 {
     const float cos_1deg_sq = cos(1.0 * M_PI / 180.0) * cos(1.0 * M_PI / 180.0);
@@ -786,7 +787,7 @@ static inline uint16_t get_best15_from32(uint32_t temp, int *x)
     return temp;
 }
 
-static void adm_decouple_s123(AdmBuffer *buf, int w, int h, int stride,
+static void adm_decouple_s123(AdmBuffer *RESTRICT buf, int w, int h, int stride,
                               double adm_enhn_gain_limit)
 {
     const float cos_1deg_sq = cos(1.0 * M_PI / 180.0) * cos(1.0 * M_PI / 180.0);
@@ -929,7 +930,7 @@ static void adm_decouple_s123(AdmBuffer *buf, int w, int h, int stride,
     }
 }
 
-static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
+static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
                     double adm_norm_view_dist, int adm_ref_display_height)
 {
     const adm_dwt_band_t *src = &buf->decouple_a;
@@ -1021,7 +1022,7 @@ static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
     }
 }
 
-static void i4_adm_csf(AdmBuffer *buf, int scale, int w, int h, int stride,
+static void i4_adm_csf(AdmBuffer *RESTRICT buf, int scale, int w, int h, int stride,
                        double adm_norm_view_dist, int adm_ref_display_height)
 {
     const i4_adm_dwt_band_t *src = &buf->i4_decouple_a;
@@ -1098,7 +1099,7 @@ static void i4_adm_csf(AdmBuffer *buf, int scale, int w, int h, int stride,
     }
 }
 
-static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
+static float adm_csf_den_scale(const adm_dwt_band_t *RESTRICT src, int w, int h,
                                int src_stride,
                                double adm_norm_view_dist, int adm_ref_display_height)
 {
@@ -1181,8 +1182,8 @@ static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
 
 }
 
-static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, int h,
-                              int src_stride,
+static float adm_csf_den_s123(const i4_adm_dwt_band_t *RESTRICT src, int scale,
+                              int w, int h, int src_stride,
                               double adm_norm_view_dist, int adm_ref_display_height)
 {
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
@@ -1263,7 +1264,8 @@ static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, in
     return (den_scale_h + den_scale_v + den_scale_d);
 }
 
-static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stride,
+static float adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
+                    int csf_a_stride,
                     double adm_norm_view_dist, int adm_ref_display_height)
 {
     const adm_dwt_band_t *src   = &buf->decouple_r;
@@ -1644,7 +1646,8 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     return (num_scale_h + num_scale_v + num_scale_d);
 }
 
-static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stride, int scale,
+static float i4_adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
+                       int csf_a_stride, int scale,
                        double adm_norm_view_dist, int adm_ref_display_height)
 {
     const i4_adm_dwt_band_t *src = &buf->i4_decouple_r;
@@ -2052,7 +2055,7 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     return (num_scale_h + num_scale_v + num_scale_d);
 }
 
-static void i16_to_i32(adm_dwt_band_t *src, i4_adm_dwt_band_t *dst,
+static void i16_to_i32(adm_dwt_band_t *RESTRICT src, i4_adm_dwt_band_t *RESTRICT dst,
                        int w, int h, int stride)
 {
     for (int i = 0; i < (h + 1) / 2; ++i) {
@@ -2064,8 +2067,8 @@ static void i16_to_i32(adm_dwt_band_t *src, i4_adm_dwt_band_t *dst,
     }
 }
 
-static void adm_dwt2_8(const uint8_t *src, const adm_dwt_band_t *dst,
-                       AdmBuffer *buf, int w, int h, int src_stride,
+static void adm_dwt2_8(const uint8_t *RESTRICT src, const adm_dwt_band_t *RESTRICT dst,
+                       AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
                        int dst_stride)
 {
     const int16_t *filter_lo = dwt2_db2_coeffs_lo;
@@ -2162,7 +2165,8 @@ static void adm_dwt2_8(const uint8_t *src, const adm_dwt_band_t *dst,
     }
 }
 
-static void adm_dwt2_16(const uint16_t *src, const adm_dwt_band_t *dst, AdmBuffer *buf, int w, int h,
+static void adm_dwt2_16(const uint16_t *RESTRICT src, const adm_dwt_band_t *RESTRICT dst,
+                        AdmBuffer *RESTRICT buf, int w, int h,
                         int src_stride, int dst_stride, int inp_size_bits)
 {
     const int16_t *filter_lo = dwt2_db2_coeffs_lo;
@@ -2259,9 +2263,11 @@ static void adm_dwt2_16(const uint16_t *src, const adm_dwt_band_t *dst, AdmBuffe
     }
 }
 
-static void adm_dwt2_s123_combined(const int32_t *i4_ref_scale, const int32_t *i4_curr_dis,
-                                   AdmBuffer *buf, int w, int h, int ref_stride,
-                                   int dis_stride, int dst_stride, int scale)
+static void adm_dwt2_s123_combined(const int32_t *RESTRICT i4_ref_scale,
+                                   const int32_t *RESTRICT i4_curr_dis,
+                                   AdmBuffer *RESTRICT buf, int w, int h,
+                                   int ref_stride, int dis_stride,
+                                   int dst_stride, int scale)
 {
     const i4_adm_dwt_band_t *i4_ref_dwt2 = &buf->i4_ref_dwt2;
     const i4_adm_dwt_band_t *i4_dis_dwt2 = &buf->i4_dis_dwt2;
@@ -2469,9 +2475,8 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
                             curr_dis_stride, buf_stride, dis_pic->bpc);
             }
 
-			/* i16_to_i32 conversion is deferred: adm_dwt2_s1_combined
-			 * at scale==1 reads directly from i16 band_a, performing
-			 * the widening inline during its vertical pass. */
+			i16_to_i32(&buf->ref_dwt2, &buf->i4_ref_dwt2, w, h, buf_stride);
+			i16_to_i32(&buf->dis_dwt2, &buf->i4_dis_dwt2, w, h, buf_stride);
 
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
@@ -2485,29 +2490,6 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 
 			num_scale = adm_cm(buf, w, h, buf_stride, buf_stride,
                                adm_norm_view_dist, adm_ref_display_height);
-		}
-		else if(scale==1) {
-			/* Scale 1: read directly from i16 band_a (from scale 0 DWT),
-			 * merging the i16-to-i32 conversion into the DWT vertical pass.
-			 * This eliminates the separate i16_to_i32 conversion pass. */
-            adm_dwt2_s1_combined(buf->ref_dwt2.band_a, buf->dis_dwt2.band_a,
-                                 buf, w, h, curr_ref_stride,
-                                 curr_dis_stride, buf_stride);
-
-			w = (w + 1) / 2;
-			h = (h + 1) / 2;
-
-			adm_decouple_s123(buf, w, h, buf_stride, adm_enhn_gain_limit);
-
-			den_scale = adm_csf_den_s123(
-			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
-			        adm_norm_view_dist, adm_ref_display_height);
-
-			i4_adm_csf(buf, scale, w, h, buf_stride,
-              adm_norm_view_dist, adm_ref_display_height);
-
-			num_scale = i4_adm_cm(buf, w, h, buf_stride, buf_stride, scale,
-                         adm_norm_view_dist, adm_ref_display_height);
 		}
 		else {
             adm_dwt2_s123_combined(i4_curr_ref_scale, i4_curr_dis_scale, buf, w, h, curr_ref_stride,

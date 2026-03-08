@@ -225,7 +225,8 @@ y_convolution_8(void *RESTRICT src, uint16_t *RESTRICT dst, unsigned width,
     }
 }
 
-static void sad_c(VmafPicture *pic_a, VmafPicture *pic_b, uint64_t *sad)
+static void sad_c(VmafPicture *RESTRICT pic_a, VmafPicture *RESTRICT pic_b,
+                  uint64_t *RESTRICT sad)
 {
     *sad = 0;
 
