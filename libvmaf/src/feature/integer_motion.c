@@ -22,6 +22,7 @@
 
 #include "cpu.h"
 #include "common/alignment.h"
+#include "common/macros.h"
 #include "dict.h"
 #include "feature_collector.h"
 #include "feature_extractor.h"
@@ -75,8 +76,8 @@ static const VmafOption options[] = {
 };
 
 static inline void
-x_convolution_16(const uint16_t *src, uint16_t *dst, unsigned width,
-                 unsigned height, ptrdiff_t src_stride,
+x_convolution_16(const uint16_t *RESTRICT src, uint16_t *RESTRICT dst,
+                 unsigned width, unsigned height, ptrdiff_t src_stride,
                  ptrdiff_t dst_stride)
 {
     const unsigned radius = filter_width / 2;
@@ -115,7 +116,7 @@ x_convolution_16(const uint16_t *src, uint16_t *dst, unsigned width,
 }
 
 static inline void
-y_convolution_16(void *src, uint16_t *dst, unsigned width,
+y_convolution_16(void *RESTRICT src, uint16_t *RESTRICT dst, unsigned width,
                  unsigned height, ptrdiff_t src_stride,
                  ptrdiff_t dst_stride, unsigned inp_size_bits)
 {
@@ -180,7 +181,7 @@ edge_8(const uint8_t *src, int height, int stride, int i, int j)
 }
 
 static inline void
-y_convolution_8(void *src, uint16_t *dst, unsigned width,
+y_convolution_8(void *RESTRICT src, uint16_t *RESTRICT dst, unsigned width,
                 unsigned height, ptrdiff_t src_stride, ptrdiff_t dst_stride,
                 unsigned inp_size_bits)
 {

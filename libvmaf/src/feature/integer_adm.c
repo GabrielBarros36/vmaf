@@ -2469,8 +2469,9 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
                             curr_dis_stride, buf_stride, dis_pic->bpc);
             }
 
-			i16_to_i32(&buf->ref_dwt2, &buf->i4_ref_dwt2, w, h, buf_stride);
-			i16_to_i32(&buf->dis_dwt2, &buf->i4_dis_dwt2, w, h, buf_stride);
+			/* i16_to_i32 conversion is deferred: adm_dwt2_s1_combined
+			 * at scale==1 reads directly from i16 band_a, performing
+			 * the widening inline during its vertical pass. */
 
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
@@ -2484,6 +2485,29 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 
 			num_scale = adm_cm(buf, w, h, buf_stride, buf_stride,
                                adm_norm_view_dist, adm_ref_display_height);
+		}
+		else if(scale==1) {
+			/* Scale 1: read directly from i16 band_a (from scale 0 DWT),
+			 * merging the i16-to-i32 conversion into the DWT vertical pass.
+			 * This eliminates the separate i16_to_i32 conversion pass. */
+            adm_dwt2_s1_combined(buf->ref_dwt2.band_a, buf->dis_dwt2.band_a,
+                                 buf, w, h, curr_ref_stride,
+                                 curr_dis_stride, buf_stride);
+
+			w = (w + 1) / 2;
+			h = (h + 1) / 2;
+
+			adm_decouple_s123(buf, w, h, buf_stride, adm_enhn_gain_limit);
+
+			den_scale = adm_csf_den_s123(
+			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
+			        adm_norm_view_dist, adm_ref_display_height);
+
+			i4_adm_csf(buf, scale, w, h, buf_stride,
+              adm_norm_view_dist, adm_ref_display_height);
+
+			num_scale = i4_adm_cm(buf, w, h, buf_stride, buf_stride, scale,
+                         adm_norm_view_dist, adm_ref_display_height);
 		}
 		else {
             adm_dwt2_s123_combined(i4_curr_ref_scale, i4_curr_dis_scale, buf, w, h, curr_ref_stride,

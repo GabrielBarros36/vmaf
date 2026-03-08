@@ -219,7 +219,7 @@ static inline void log_generate(uint16_t *log2_table)
     }
 }
 
-void vif_statistic_8(struct VifPublicState *s, float *num, float *den, unsigned w, unsigned h) {
+void vif_statistic_8(struct VifPublicState *RESTRICT s, float *RESTRICT num, float *RESTRICT den, unsigned w, unsigned h) {
     const unsigned fwidth = vif_filter1d_width[0];
     const uint16_t *vif_filt_s0 = vif_filter1d_table[0];
     VifBuffer buf = s->buf;
@@ -342,7 +342,7 @@ void vif_statistic_8(struct VifPublicState *s, float *num, float *den, unsigned 
     den[0] = accum_den_log / 2048.0 + accum_den_non_log;
 }
 
-void vif_statistic_16(struct VifPublicState *s, float *num, float *den, unsigned w, unsigned h, int bpc, int scale) {
+void vif_statistic_16(struct VifPublicState *RESTRICT s, float *RESTRICT num, float *RESTRICT den, unsigned w, unsigned h, int bpc, int scale) {
     const unsigned fwidth = vif_filter1d_width[scale];
     const uint16_t *vif_filt = vif_filter1d_table[scale];
     VifBuffer buf = s->buf;

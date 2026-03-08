@@ -19,9 +19,10 @@
 #include <stdint.h>
 
 #include <libvmaf/picture.h>
+#include "common/macros.h"
 
-void picture_copy_hbd(float *dst, ptrdiff_t dst_stride,
-                      VmafPicture *src, int offset, float scaler)
+void picture_copy_hbd(float *RESTRICT dst, ptrdiff_t dst_stride,
+                      VmafPicture *RESTRICT src, int offset, float scaler)
 {
     float *float_data = dst;
     uint16_t *data = src->data[0];
@@ -53,8 +54,8 @@ void picture_copy_hbd(float *dst, ptrdiff_t dst_stride,
     return;
 }
 
-void picture_copy(float *dst, ptrdiff_t dst_stride,
-                  VmafPicture *src, int offset, unsigned bpc)
+void picture_copy(float *RESTRICT dst, ptrdiff_t dst_stride,
+                  VmafPicture *RESTRICT src, int offset, unsigned bpc)
 {
     if (bpc == 10) {
         picture_copy_hbd(dst, dst_stride, src, offset, 4.0f);

@@ -23,6 +23,8 @@
 #include <stdbool.h>
 #include <assert.h>
 
+#include "common/macros.h"
+
 /* Enhancement gain imposed on vif, must be >= 1.0, where 1.0 means the gain is completely disabled */
 #ifndef DEFAULT_VIF_ENHN_GAIN_LIMIT
 #define DEFAULT_VIF_ENHN_GAIN_LIMIT (100.0)
@@ -115,8 +117,8 @@ static inline void PADDING_SQ_DATA_2(VifBuffer buf, int w, unsigned fwidth_half)
     }
 }
 
-void vif_statistic_8(struct VifPublicState *s, float *num, float *den, unsigned w, unsigned h);
-void vif_statistic_16(struct VifPublicState *s, float *num, float *den, unsigned w, unsigned h, int bpc, int scale);
+void vif_statistic_8(struct VifPublicState *RESTRICT s, float *RESTRICT num, float *RESTRICT den, unsigned w, unsigned h);
+void vif_statistic_16(struct VifPublicState *RESTRICT s, float *RESTRICT num, float *RESTRICT den, unsigned w, unsigned h, int bpc, int scale);
 
 /*
  * Compute vif residuals on a vertically filtered line 

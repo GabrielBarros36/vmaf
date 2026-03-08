@@ -17,5 +17,7 @@
  */
 #include <stddef.h>
 
-void picture_copy(float *dst, ptrdiff_t dst_stride, VmafPicture *src,
-                  int offset, unsigned bpc);
+#include "common/macros.h"
+
+void picture_copy(float *RESTRICT dst, ptrdiff_t dst_stride,
+                  VmafPicture *RESTRICT src, int offset, unsigned bpc);
