@@ -66,13 +66,13 @@ void get_derivative_data_for_row_avx2(const uint16_t *image_data, uint16_t *deri
         __m256i ones = _mm256_set1_epi16(1);
         int col = 0;
         for (; col + 15 < width - 1; col += 16) {
-            __m256i horiz_vals1 = _mm256_loadu_si256((__m256i*) &image_data[row * stride + col]);
+            __m256i curr_vals = _mm256_loadu_si256((__m256i*) &image_data[row * stride + col]);
             __m256i horiz_vals2 = _mm256_loadu_si256((__m256i*) &image_data[row * stride + col + 1]);
-            __m256i horiz_result = _mm256_and_si256(ones, _mm256_cmpeq_epi16(horiz_vals1, horiz_vals2));
-            __m256i vert_vals1 = _mm256_loadu_si256((__m256i*) &image_data[row * stride + col]);
+            __m256i horiz_mask = _mm256_cmpeq_epi16(curr_vals, horiz_vals2);
             __m256i vert_vals2 = _mm256_loadu_si256((__m256i*) &image_data[(row + 1) * stride + col]);
-            __m256i vert_result = _mm256_and_si256(ones, _mm256_cmpeq_epi16(vert_vals1, vert_vals2));
-            _mm256_storeu_si256((__m256i*) &derivative_buffer[col], _mm256_and_si256(horiz_result, vert_result));
+            __m256i vert_mask = _mm256_cmpeq_epi16(curr_vals, vert_vals2);
+            __m256i combined = _mm256_and_si256(horiz_mask, vert_mask);
+            _mm256_storeu_si256((__m256i*) &derivative_buffer[col], _mm256_and_si256(ones, combined));
         }
         for (; col < width; col++) {
             bool horizontal_derivative = (col == width - 1 || image_data[row * stride + col] == image_data[row * stride + col + 1]);
