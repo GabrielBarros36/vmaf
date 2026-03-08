@@ -47,3 +47,8 @@ option('enable_fuzz',
     type: 'boolean',
     value: false,
     description: 'Build fuzz targets (requires clang with libFuzzer)')
+
+option('enable_lto',
+    type: 'boolean',
+    value: false,
+    description: 'Enable Link-Time Optimization')
