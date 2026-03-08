@@ -25,9 +25,26 @@ void picture_copy_hbd(float *dst, ptrdiff_t dst_stride,
 {
     float *float_data = dst;
     uint16_t *data = src->data[0];
+    const unsigned w = src->w[0];
+    const unsigned h = src->h[0];
 
-    for (unsigned i = 0; i < src->h[0]; i++) {
-        for (unsigned j = 0; j < src->w[0]; j++) {
+    /*
+     * When both source and destination planes are contiguous (stride equals
+     * the actual row width), flatten into a single pass over all pixels.
+     * This eliminates per-row pointer arithmetic and allows the compiler to
+     * better vectorize the conversion loop.
+     */
+    if ((ptrdiff_t)(w * sizeof(uint16_t)) == src->stride[0] &&
+        (ptrdiff_t)(w * sizeof(float)) == dst_stride) {
+        const unsigned total = w * h;
+        for (unsigned j = 0; j < total; j++) {
+            float_data[j] = (float) data[j] / scaler + offset;
+        }
+        return;
+    }
+
+    for (unsigned i = 0; i < h; i++) {
+        for (unsigned j = 0; j < w; j++) {
             float_data[j] = (float) data[j] / scaler + offset;
         }
         float_data += dst_stride / sizeof(float);
@@ -52,9 +69,26 @@ void picture_copy(float *dst, ptrdiff_t dst_stride,
 
     float *float_data = dst;
     uint8_t *data = src->data[0];
+    const unsigned w = src->w[0];
+    const unsigned h = src->h[0];
 
-    for (unsigned i = 0; i < src->h[0]; i++) {
-        for (unsigned j = 0; j < src->w[0]; j++) {
+    /*
+     * When both source and destination planes are contiguous (stride equals
+     * the actual row width), flatten into a single pass over all pixels.
+     * This eliminates per-row pointer arithmetic and allows the compiler to
+     * better vectorize the conversion loop.
+     */
+    if ((ptrdiff_t)(w * sizeof(uint8_t)) == src->stride[0] &&
+        (ptrdiff_t)(w * sizeof(float)) == dst_stride) {
+        const unsigned total = w * h;
+        for (unsigned j = 0; j < total; j++) {
+            float_data[j] = (float) data[j] + offset;
+        }
+        return;
+    }
+
+    for (unsigned i = 0; i < h; i++) {
+        for (unsigned j = 0; j < w; j++) {
             float_data[j] = (float) data[j] + offset;
         }
         float_data += dst_stride / sizeof(float);
