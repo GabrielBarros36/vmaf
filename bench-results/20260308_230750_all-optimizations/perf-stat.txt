@@ -1,0 +1,11 @@
+
+ Performance counter stats for 'taskset -c 2,3,4,5 numactl --cpunodebind=0 --membind=0 /opt/vmaf/libvmaf/build/tools/vmaf --reference /opt/vmaf/testdata/bench_ref_1920x1080.yuv --distorted /opt/vmaf/testdata/bench_dis_1920x1080.yuv --width 1920 --height 1080 --pixel_format 420 --bitdepth 8 --model version=vmaf_v0.6.1 --threads 4 --output /dev/null' (7 runs):
+
+    28,489,684,361      cycles                                                                  ( +-  0.03% )
+    89,331,309,309      instructions                     #    3.14  insn per cycle              ( +-  0.01% )
+     2,324,961,400      cache-references                                                        ( +-  0.21% )
+       244,437,083      cache-misses                     #   10.51% of all cache refs           ( +-  2.20% )
+        71,857,797      branch-misses                                                           ( +-  0.28% )
+
+           2.68515 +- 0.00218 seconds time elapsed  ( +-  0.08% )
+
