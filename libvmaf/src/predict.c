@@ -268,13 +268,14 @@ int vmaf_predict_score_at_index(VmafModel *model,
             return err;
         }
 
-        char *feature_name =
-            vmaf_feature_name_from_options(model->feature[i].name,
-                    fex_ctx->fex->options, fex_ctx->fex->priv);
+        char feature_name[256];
+        err = vmaf_feature_name_from_options_buf(model->feature[i].name,
+                    fex_ctx->fex->options, fex_ctx->fex->priv,
+                    feature_name, sizeof(feature_name));
 
         vmaf_feature_extractor_context_destroy(fex_ctx);
 
-        if (!feature_name) {
+        if (err) {
             vmaf_log(VMAF_LOG_LEVEL_ERROR,
                      "vmaf_predict_score_at_index(): could not generate "
                      "feature name\n");
@@ -293,10 +294,8 @@ int vmaf_predict_score_at_index(VmafModel *model,
                        "vmaf_predict_score_at_index(): no feature '%s' "
                        "at index %d\n", feature_name, index);
             }
-            free(feature_name);
             goto free_node;
         }
-        free(feature_name);
 
         err = normalize(model, model->feature[i].slope,
                         model->feature[i].intercept, &feature_score);

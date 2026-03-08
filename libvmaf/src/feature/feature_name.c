@@ -41,20 +41,20 @@ static size_t snprintfcat(char* buf, size_t buf_sz, char const* fmt, ...)
 
 #define VMAF_FEATURE_NAME_DEFAULT_BUFFER_SIZE 256
 
-static char *vmaf_feature_name_from_opts_dict(const char *name,
-                              const VmafOption *opts, VmafDictionary *opts_dict)
+static int vmaf_feature_name_from_opts_dict_buf(const char *name,
+                              const VmafOption *opts, VmafDictionary *opts_dict,
+                              char *dst, size_t dst_sz)
 {
     VmafDictionary *sorted_dict = NULL;
     vmaf_dictionary_copy(&opts_dict, &sorted_dict);
     vmaf_dictionary_alphabetical_sort(sorted_dict);
 
-    const size_t buf_sz = VMAF_FEATURE_NAME_DEFAULT_BUFFER_SIZE;
-    char buf[VMAF_FEATURE_NAME_DEFAULT_BUFFER_SIZE + 1] = { 0 };
+    memset(dst, 0, dst_sz);
 
     if (!opts || !sorted_dict) {
-        snprintfcat(buf, buf_sz, "%s", name);
+        snprintfcat(dst, dst_sz, "%s", name);
     } else {
-        snprintfcat(buf, buf_sz, "%s", vmaf_feature_name_alias(name));
+        snprintfcat(dst, dst_sz, "%s", vmaf_feature_name_alias(name));
 
         for (unsigned i = 0; i < sorted_dict->cnt; i++) {
             const VmafOption *opt = NULL;
@@ -67,10 +67,10 @@ static char *vmaf_feature_name_from_opts_dict(const char *name,
 
                 switch (opt->type) {
                 case VMAF_OPT_TYPE_BOOL:
-                    snprintfcat(buf, buf_sz, "_%s", key);
+                    snprintfcat(dst, dst_sz, "_%s", key);
                     break;
                 default:
-                    snprintfcat(buf, buf_sz, "_%s_%s", key, val);
+                    snprintfcat(dst, dst_sz, "_%s_%s", key, val);
                     break;
                 }
             }
@@ -79,6 +79,16 @@ static char *vmaf_feature_name_from_opts_dict(const char *name,
     }
 
     vmaf_dictionary_free(&sorted_dict);
+    return 0;
+}
+
+static char *vmaf_feature_name_from_opts_dict(const char *name,
+                              const VmafOption *opts, VmafDictionary *opts_dict)
+{
+    const size_t buf_sz = VMAF_FEATURE_NAME_DEFAULT_BUFFER_SIZE;
+    char buf[VMAF_FEATURE_NAME_DEFAULT_BUFFER_SIZE + 1];
+
+    vmaf_feature_name_from_opts_dict_buf(name, opts, opts_dict, buf, buf_sz);
 
     const size_t dst_sz = strnlen(buf, buf_sz) + 1;
     char *dst = malloc(dst_sz);
@@ -154,6 +164,58 @@ write_output:
 exit:
     vmaf_dictionary_free(&opts_dict);
     return output;
+}
+
+int vmaf_feature_name_from_options_buf(const char *name, const VmafOption *opts,
+                                       void *obj, char *buf, size_t buf_sz)
+{
+    if (!name) return -EINVAL;
+    if (!buf) return -EINVAL;
+    if (!buf_sz) return -EINVAL;
+
+    VmafDictionary *opts_dict = NULL;
+
+    if (!opts || !obj) goto write_output;
+
+    const VmafOption *opt = NULL;
+    for (unsigned i = 0; (opt = &opts[i]); i++) {
+        if (!opt->name) break;
+        if (!(opt->flags & VMAF_OPT_FLAG_FEATURE_PARAM)) continue;
+
+        const void *data = (uint8_t*)obj + opt->offset;
+        if (option_is_default(opt, data)) continue;
+
+        const size_t tmp_sz = VMAF_FEATURE_NAME_DEFAULT_BUFFER_SIZE;
+        char tmp[VMAF_FEATURE_NAME_DEFAULT_BUFFER_SIZE + 1] = { 0 };
+
+        switch (opt->type) {
+        case VMAF_OPT_TYPE_BOOL:
+            snprintf(tmp, tmp_sz, "%s", *((bool*)data) ? "true" : "false");
+            break;
+        case VMAF_OPT_TYPE_INT:
+            snprintf(tmp, tmp_sz, "%d", *((int*)data));
+            break;
+        case VMAF_OPT_TYPE_DOUBLE:
+            snprintf(tmp, tmp_sz, "%g", *((double*)data));
+            break;
+        case VMAF_OPT_TYPE_STRING:
+            snprintf(tmp, tmp_sz, "%s", *((char**)data));
+            break;
+        default:
+            break;
+        }
+
+        int err = vmaf_dictionary_set(&opts_dict, opt->name, tmp, 0);
+        if (err) {
+            vmaf_dictionary_free(&opts_dict);
+            return err;
+        }
+    }
+
+write_output:
+    vmaf_feature_name_from_opts_dict_buf(name, opts, opts_dict, buf, buf_sz);
+    vmaf_dictionary_free(&opts_dict);
+    return 0;
 }
 
 VmafDictionary *
