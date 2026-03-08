@@ -75,21 +75,22 @@ static const VmafOption options[] = {
 };
 
 static FORCE_INLINE void
-pad_top_and_bottom(VifBuffer buf, unsigned h, int fwidth)
+pad_top_and_bottom(VifBuffer buf, unsigned h, int fwidth,
+                   size_t data_width)
 {
     const unsigned fwidth_half = fwidth / 2;
     unsigned char *ref = buf.ref;
     unsigned char *dis = buf.dis;
     for (unsigned i = 1; i <= fwidth_half; ++i) {
         size_t offset = buf.stride * i;
-        memcpy(ref - offset, ref + offset, buf.stride);
-        memcpy(dis - offset, dis + offset, buf.stride);
+        memcpy(ref - offset, ref + offset, data_width);
+        memcpy(dis - offset, dis + offset, data_width);
         memcpy(ref + buf.stride * (h - 1) + buf.stride * i,
                ref + buf.stride * (h - 1) - buf.stride * i,
-               buf.stride);
+               data_width);
         memcpy(dis + buf.stride * (h - 1) + buf.stride * i,
                dis + buf.stride * (h - 1) - buf.stride * i,
-               buf.stride);
+               data_width);
     }
 }
 
@@ -107,7 +108,8 @@ decimate_and_pad(VifBuffer buf, unsigned w, unsigned h, int scale)
             dis[i * stride + j] = buf.mu2[(i * 2) * mu_stride + (j * 2)];
         }
     }
-    pad_top_and_bottom(buf, h / 2, vif_filter1d_width[scale]);
+    pad_top_and_bottom(buf, h / 2, vif_filter1d_width[scale],
+                       (w / 2) * sizeof(uint16_t));
 }
 
 static void subsample_rd_8(VifBuffer buf, unsigned w, unsigned h)
@@ -772,7 +774,8 @@ static int extract(VmafFeatureExtractor *fex,
         ref_out += s->public.buf.stride;
         dis_out += s->public.buf.stride;
     }
-    pad_top_and_bottom(s->public.buf, h, vif_filter1d_width[0]);
+    pad_top_and_bottom(s->public.buf, h, vif_filter1d_width[0],
+                       w << (ref_pic->bpc > 8));
 
     VifScore vif_score;
     for (unsigned scale = 0; scale < 4; ++scale) {
