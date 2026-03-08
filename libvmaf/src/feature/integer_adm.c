@@ -39,6 +39,12 @@ typedef struct AdmState {
     double adm_enhn_gain_limit;
     double adm_norm_view_dist;
     int adm_ref_display_height;
+    // Precomputed CSF (Contrast Sensitivity Function) coefficients.
+    // csf_factors[scale][0] = dwt_quant_step(scale, theta=1)
+    // csf_factors[scale][1] = dwt_quant_step(scale, theta=2)
+    // These depend only on adm_norm_view_dist and adm_ref_display_height,
+    // which are constant across frames, so we compute them once at init.
+    float csf_factors[4][2];
     void (*dwt2_8)(const uint8_t *src, const adm_dwt_band_t *dst,
                    AdmBuffer *buf, int w, int h, int src_stride,
                    int dst_stride);
@@ -931,6 +937,7 @@ static void adm_decouple_s123(AdmBuffer *RESTRICT buf, int w, int h, int stride,
 }
 
 static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
+                    const float csf_factors[4][2],
                     double adm_norm_view_dist, int adm_ref_display_height)
 {
     const adm_dwt_band_t *src = &buf->decouple_a;
@@ -943,10 +950,10 @@ static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    // 0 is scale zero passed to dwt_quant_step
+    // 0 is scale zero - use precomputed CSF factors
 
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
     const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     /**
@@ -1023,7 +1030,7 @@ static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
 }
 
 static void i4_adm_csf(AdmBuffer *RESTRICT buf, int scale, int w, int h, int stride,
-                       double adm_norm_view_dist, int adm_ref_display_height)
+                       const float csf_factors[4][2])
 {
     const i4_adm_dwt_band_t *src = &buf->i4_decouple_a;
     const i4_adm_dwt_band_t *dst = &buf->i4_csf_a;
@@ -1035,8 +1042,8 @@ static void i4_adm_csf(AdmBuffer *RESTRICT buf, int scale, int w, int h, int str
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
+    const float factor1 = csf_factors[scale][0];
+    const float factor2 = csf_factors[scale][1];
     const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     //i_rfactor in fixed-point
@@ -1101,12 +1108,12 @@ static void i4_adm_csf(AdmBuffer *RESTRICT buf, int scale, int w, int h, int str
 
 static float adm_csf_den_scale(const adm_dwt_band_t *RESTRICT src, int w, int h,
                                int src_stride,
-                               double adm_norm_view_dist, int adm_ref_display_height)
+                               const float csf_factors[4][2])
 {
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
     const float rfactor[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     uint64_t accum_h = 0, accum_v = 0, accum_d = 0;
@@ -1184,12 +1191,12 @@ static float adm_csf_den_scale(const adm_dwt_band_t *RESTRICT src, int w, int h,
 
 static float adm_csf_den_s123(const i4_adm_dwt_band_t *RESTRICT src, int scale,
                               int w, int h, int src_stride,
-                              double adm_norm_view_dist, int adm_ref_display_height)
+                              const float csf_factors[4][2])
 {
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
+    float factor1 = csf_factors[scale][0];
+    float factor2 = csf_factors[scale][1];
     const float rfactor[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     uint64_t accum_h = 0, accum_v = 0, accum_d = 0;
@@ -1266,6 +1273,7 @@ static float adm_csf_den_s123(const i4_adm_dwt_band_t *RESTRICT src, int scale,
 
 static float adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
                     int csf_a_stride,
+                    const float csf_factors[4][2],
                     double adm_norm_view_dist, int adm_ref_display_height)
 {
     const adm_dwt_band_t *src   = &buf->decouple_r;
@@ -1274,10 +1282,10 @@ static float adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    // 0 is scale zero passed to dwt_quant_step
+    // 0 is scale zero - use precomputed CSF factors
 
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
     const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     /**
@@ -1648,7 +1656,7 @@ static float adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
 
 static float i4_adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
                        int csf_a_stride, int scale,
-                       double adm_norm_view_dist, int adm_ref_display_height)
+                       const float csf_factors[4][2])
 {
     const i4_adm_dwt_band_t *src = &buf->i4_decouple_r;
     const i4_adm_dwt_band_t *csf_f = &buf->i4_csf_f;
@@ -1656,8 +1664,8 @@ static float i4_adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
+    float factor1 = csf_factors[scale][0];
+    float factor2 = csf_factors[scale][1];
     float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     const uint32_t rfactor[3] = { (uint32_t)(rfactor1[0] * pow(2, 32)),
@@ -2431,6 +2439,7 @@ static void adm_dwt2_s123_combined(const int32_t *RESTRICT i4_ref_scale,
 void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic,
                          double *score, double *score_num, double *score_den, double *scores, AdmBuffer *buf,
                          double adm_enhn_gain_limit,
+                         const float csf_factors[4][2],
                          double adm_norm_view_dist, int adm_ref_display_height)
 {
     int w = ref_pic->w[0];
@@ -2484,11 +2493,13 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			adm_decouple(buf, w, h, buf_stride, adm_enhn_gain_limit);
 
 			den_scale = adm_csf_den_scale(&buf->ref_dwt2, w, h, buf_stride,
-                                 adm_norm_view_dist, adm_ref_display_height);
+                                 csf_factors);
 
-			adm_csf(buf, w, h, buf_stride, adm_norm_view_dist, adm_ref_display_height);
+			adm_csf(buf, w, h, buf_stride, csf_factors,
+                    adm_norm_view_dist, adm_ref_display_height);
 
 			num_scale = adm_cm(buf, w, h, buf_stride, buf_stride,
+                               csf_factors,
                                adm_norm_view_dist, adm_ref_display_height);
 		}
 		else {
@@ -2502,13 +2513,13 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 
 			den_scale = adm_csf_den_s123(
 			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
-			        adm_norm_view_dist, adm_ref_display_height);
+			        csf_factors);
 
 			i4_adm_csf(buf, scale, w, h, buf_stride,
-              adm_norm_view_dist, adm_ref_display_height);
+              csf_factors);
 
 			num_scale = i4_adm_cm(buf, w, h, buf_stride, buf_stride, scale,
-                         adm_norm_view_dist, adm_ref_display_height);
+                         csf_factors);
 		}
 
 		num += num_scale;
@@ -2648,6 +2659,18 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
 
     div_lookup_generator();
 
+    // Precompute CSF (Contrast Sensitivity Function) coefficients.
+    // These depend only on adm_norm_view_dist and adm_ref_display_height,
+    // which are constant across all frames.
+    for (int scale = 0; scale < 4; ++scale) {
+        s->csf_factors[scale][0] = dwt_quant_step(
+            &dwt_7_9_YCbCr_threshold[0], scale, 1,
+            s->adm_norm_view_dist, s->adm_ref_display_height);
+        s->csf_factors[scale][1] = dwt_quant_step(
+            &dwt_7_9_YCbCr_threshold[0], scale, 2,
+            s->adm_norm_view_dist, s->adm_ref_display_height);
+    }
+
     s->feature_name_dict =
         vmaf_feature_name_dict_from_provided_features(fex->provided_features,
                 fex->options, s);
@@ -2688,6 +2711,7 @@ static int extract(VmafFeatureExtractor *fex,
     integer_compute_adm(s, ref_pic, dist_pic, &score, &score_num, &score_den,
                         scores, &s->buf,
                         s->adm_enhn_gain_limit,
+                        s->csf_factors,
                         s->adm_norm_view_dist, s->adm_ref_display_height);
 
     err |= vmaf_feature_collector_append_with_dict(feature_collector,
