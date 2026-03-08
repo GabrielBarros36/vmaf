@@ -360,9 +360,9 @@ static int vmaf_bootstrap_predict_score_at_index(
     double scores[model_collection->cnt];
 
     for (unsigned i = 0; i < model_collection->cnt; i++) {
-        // mean, stddev, etc. are calculated on untransformed/unclipped scores
-        // gather the unclipped scores, for the purposes of these calculations
-        // but do not write them to the feature collector
+        // Compute SVM prediction once (with transform/clip disabled),
+        // then apply transform+clip separately to get the clipped score.
+        // This avoids redundant feature gathering and SVM prediction.
         const unsigned flags =
             VMAF_MODEL_FLAG_DISABLE_CLIP | VMAF_MODEL_FLAG_DISABLE_TRANSFORM;
         err = vmaf_predict_score_at_index(model_collection->model[i],
@@ -371,12 +371,16 @@ static int vmaf_bootstrap_predict_score_at_index(
                                           false, flags);
         if (err) return err;
 
-        // do not override the model's transform/clip behavior
-        // write the scores to the feature collector
-        double score;
-        err = vmaf_predict_score_at_index(model_collection->model[i],
-                                          feature_collector, index,
-                                          &score, true, false, 0);
+        // Apply transform and clip to the raw prediction to get the
+        // clipped score, and write it to the feature collector.
+        double clipped_score = scores[i];
+        err = transform(model_collection->model[i], &clipped_score, 0);
+        if (err) return err;
+        err = clip(model_collection->model[i], &clipped_score, 0);
+        if (err) return err;
+        err = vmaf_feature_collector_append(feature_collector,
+                                            model_collection->model[i]->name,
+                                            clipped_score, index);
         if (err) return err;
     }
 
