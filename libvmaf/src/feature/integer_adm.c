@@ -2082,17 +2082,7 @@ static float i4_adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
     return (num_scale_h + num_scale_v + num_scale_d);
 }
 
-static void i16_to_i32(adm_dwt_band_t *RESTRICT src, i4_adm_dwt_band_t *RESTRICT dst,
-                       int w, int h, int stride)
-{
-    for (int i = 0; i < (h + 1) / 2; ++i) {
-        int16_t *src_band_a_addr = &src->band_a[i * stride];
-        int32_t *dst_band_a_addr = &dst->band_a[i * stride];
-        for (int j = 0; j < (w + 1) / 2; ++j) {
-            *(dst_band_a_addr++) = (int32_t)(*(src_band_a_addr++));
-        }
-    }
-}
+/* i16_to_i32 removed: conversion now merged into adm_dwt2_s1_combined */
 
 static void adm_dwt2_8(const uint8_t *RESTRICT src, const adm_dwt_band_t *RESTRICT dst,
                        AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
@@ -2455,6 +2445,177 @@ static void adm_dwt2_s123_combined(const int32_t *RESTRICT i4_ref_scale,
     }
 }
 
+
+/**
+ * Specialized DWT for scale==1 that reads directly from int16_t input,
+ * eliminating the need for a separate i16_to_i32 conversion pass.
+ * The vertical pass widens int16 to int32 inline during the filter
+ * computation, saving one full read+write pass over the data.
+ *
+ * For scale==1: shift_VP=0, add_VP=0, shift_HP=15, add_HP=16384
+ */
+static void adm_dwt2_s1_combined(const int16_t *i2_ref_scale,
+                                 const int16_t *i2_dis_scale,
+                                 AdmBuffer *buf, int w, int h,
+                                 int ref_stride, int dis_stride,
+                                 int dst_stride)
+{
+    const i4_adm_dwt_band_t *i4_ref_dwt2 = &buf->i4_ref_dwt2;
+    const i4_adm_dwt_band_t *i4_dis_dwt2 = &buf->i4_dis_dwt2;
+    int **ind_y = buf->ind_y;
+    int **ind_x = buf->ind_x;
+
+    const int16_t *filter_lo = dwt2_db2_coeffs_lo;
+    const int16_t *filter_hi = dwt2_db2_coeffs_hi;
+
+    /* Scale 1 constants: VP shift=0, HP shift=15, HP round=16384 */
+    const int32_t add_bef_shift_round_HP = 16384;
+    const int16_t shift_HP = 15;
+
+    int32_t *tmplo_ref = buf->tmp_ref;
+    int32_t *tmphi_ref = tmplo_ref + w;
+    int32_t *tmplo_dis = tmphi_ref + w;
+    int32_t *tmphi_dis = tmplo_dis + w;
+    int32_t s10, s11, s12, s13;
+
+    int64_t accum_ref;
+
+    for (int i = 0; i < (h + 1) / 2; ++i)
+    {
+        /* Vertical pass - reads int16_t, widens to int32_t inline. */
+        for (int j = 0; j < w; ++j)
+        {
+            /* Widen i16 to i32 during load (zero-cost sign extension). */
+            s10 = (int32_t)i2_ref_scale[ind_y[0][i] * ref_stride + j];
+            s11 = (int32_t)i2_ref_scale[ind_y[1][i] * ref_stride + j];
+            s12 = (int32_t)i2_ref_scale[ind_y[2][i] * ref_stride + j];
+            s13 = (int32_t)i2_ref_scale[ind_y[3][i] * ref_stride + j];
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            /* shift_VP=0 for scale 1, so no shift needed */
+            tmplo_ref[j] = (int32_t)accum_ref;
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            tmphi_ref[j] = (int32_t)accum_ref;
+
+            s10 = (int32_t)i2_dis_scale[ind_y[0][i] * dis_stride + j];
+            s11 = (int32_t)i2_dis_scale[ind_y[1][i] * dis_stride + j];
+            s12 = (int32_t)i2_dis_scale[ind_y[2][i] * dis_stride + j];
+            s13 = (int32_t)i2_dis_scale[ind_y[3][i] * dis_stride + j];
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            tmplo_dis[j] = (int32_t)accum_ref;
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            tmphi_dis[j] = (int32_t)accum_ref;
+        }
+        /* Horizontal pass (lo and hi). */
+        for (int j = 0; j < (w + 1) / 2; ++j)
+        {
+            int j0 = ind_x[0][j];
+            int j1 = ind_x[1][j];
+            int j2 = ind_x[2][j];
+            int j3 = ind_x[3][j];
+
+            s10 = tmplo_ref[j0];
+            s11 = tmplo_ref[j1];
+            s12 = tmplo_ref[j2];
+            s13 = tmplo_ref[j3];
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            i4_ref_dwt2->band_a[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            i4_ref_dwt2->band_v[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            s10 = tmphi_ref[j0];
+            s11 = tmphi_ref[j1];
+            s12 = tmphi_ref[j2];
+            s13 = tmphi_ref[j3];
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            i4_ref_dwt2->band_h[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            i4_ref_dwt2->band_d[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            s10 = tmplo_dis[j0];
+            s11 = tmplo_dis[j1];
+            s12 = tmplo_dis[j2];
+            s13 = tmplo_dis[j3];
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            i4_dis_dwt2->band_a[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            i4_dis_dwt2->band_v[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            s10 = tmphi_dis[j0];
+            s11 = tmphi_dis[j1];
+            s12 = tmphi_dis[j2];
+            s13 = tmphi_dis[j3];
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            i4_dis_dwt2->band_h[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            i4_dis_dwt2->band_d[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+        }
+    }
+}
+
 void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic,
                          double *score, double *score_num, double *score_den, double *scores, AdmBuffer *buf,
                          double adm_enhn_gain_limit,
@@ -2503,8 +2664,9 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
                             curr_dis_stride, buf_stride, dis_pic->bpc);
             }
 
-			i16_to_i32(&buf->ref_dwt2, &buf->i4_ref_dwt2, w, h, buf_stride);
-			i16_to_i32(&buf->dis_dwt2, &buf->i4_dis_dwt2, w, h, buf_stride);
+			/* i16_to_i32 conversion is deferred: adm_dwt2_s1_combined
+			 * at scale==1 reads directly from i16 band_a, performing
+			 * the widening inline during its vertical pass. */
 
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
@@ -2520,6 +2682,29 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			num_scale = adm_cm(buf, w, h, buf_stride, buf_stride,
                                csf_factors,
                                adm_norm_view_dist, adm_ref_display_height);
+		}
+		else if(scale==1) {
+			/* Scale 1: read directly from i16 band_a (from scale 0 DWT),
+			 * merging the i16-to-i32 conversion into the DWT vertical pass.
+			 * This eliminates the separate i16_to_i32 conversion pass. */
+            adm_dwt2_s1_combined(buf->ref_dwt2.band_a, buf->dis_dwt2.band_a,
+                                 buf, w, h, curr_ref_stride,
+                                 curr_dis_stride, buf_stride);
+
+			w = (w + 1) / 2;
+			h = (h + 1) / 2;
+
+			adm_decouple_s123(buf, w, h, buf_stride, adm_enhn_gain_limit);
+
+			den_scale = adm_csf_den_s123(
+			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
+			        csf_factors);
+
+			i4_adm_csf(buf, scale, w, h, buf_stride,
+              csf_factors);
+
+			num_scale = i4_adm_cm(buf, w, h, buf_stride, buf_stride, scale,
+                         csf_factors);
 		}
 		else {
             adm_dwt2_s123_combined(i4_curr_ref_scale, i4_curr_dis_scale, buf, w, h, curr_ref_stride,
