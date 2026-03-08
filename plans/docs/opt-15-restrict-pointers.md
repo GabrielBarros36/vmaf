@@ -34,6 +34,10 @@ Added `#include "common/macros.h"` and `RESTRICT` to the following functions:
 
 | Function | Parameters annotated | Rationale |
 |----------|---------------------|-----------|
+| `adm_decouple` | `buf` | Buffer struct with disjoint ref/dis input and decouple output bands |
+| `adm_decouple_s123` | `buf` | Same as above for 32-bit scales 1-3 |
+| `adm_csf` | `buf` | Buffer struct with disjoint decouple input and csf output bands |
+| `i4_adm_csf` | `buf` | Same as above for 32-bit bands |
 | `adm_dwt2_8` | `src`, `dst`, `buf` | DWT kernel; src is read-only input, dst bands are output, buf holds scratch |
 | `adm_dwt2_16` | `src`, `dst`, `buf` | Same as above for 16-bit inputs |
 | `adm_dwt2_s123_combined` | `i4_ref_scale`, `i4_curr_dis`, `buf` | Two distinct input buffers + scratch buffer |
@@ -61,6 +65,7 @@ Added `#include "common/macros.h"` and `RESTRICT` to:
 | `x_convolution_16` | `src`, `dst` | Horizontal convolution: reads from src, writes to separate dst |
 | `y_convolution_16` | `src`, `dst` | Vertical convolution: same non-aliasing guarantee |
 | `y_convolution_8` | `src`, `dst` | 8-bit vertical convolution variant |
+| `sad_c` | `pic_a`, `pic_b`, `sad` | Two distinct input pictures + scalar output |
 
 ### picture_copy.c / picture_copy.h
 
