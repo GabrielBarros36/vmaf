@@ -31,6 +31,7 @@
 
 #include "picture.h"
 #include "integer_vif.h"
+#include "vif_log2_table.h"
 
 #if ARCH_X86
 #include "x86/vif_avx2.h"
@@ -216,9 +217,9 @@ static void subsample_rd_16(VifBuffer buf, unsigned w, unsigned h, int scale, in
 
 static inline void log_generate(uint16_t *log2_table)
 {
-    for (unsigned i = 32767; i < 65536; ++i) {
-        log2_table[i] = (uint16_t)round(log2f((float)i) * 2048);
-    }
+    memcpy(log2_table + VIF_LOG2_TABLE_OFFSET,
+           vif_log2_table,
+           VIF_LOG2_TABLE_SIZE * sizeof(uint16_t));
 }
 
 void vif_statistic_8(struct VifPublicState *RESTRICT s, float *RESTRICT num, float *RESTRICT den, unsigned w, unsigned h) {
