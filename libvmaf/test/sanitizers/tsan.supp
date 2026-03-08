@@ -1,0 +1,6 @@
+# TSan suppression file for libvmaf
+# Format: race_type:function_or_library_pattern
+# Reference: https://github.com/google/sanitizers/wiki/ThreadSanitizerSuppressions
+
+# Suppress benign races in third-party libsvm code
+race:svm_predict_values

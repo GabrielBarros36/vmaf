@@ -1,0 +1,85 @@
+name: Fuzzing
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  schedule:
+    # Run extended fuzzing nightly at 03:00 UTC
+    - cron: '0 3 * * *'
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - name: y4m_parser
+            binary: fuzz_y4m_parser
+            dict: libvmaf/fuzz/dict/y4m.dict
+            corpus: libvmaf/fuzz/corpus/y4m
+            max_len: 65536
+            timeout: 10
+          - name: json_model
+            binary: fuzz_json_model
+            dict: libvmaf/fuzz/dict/json_model.dict
+            corpus: libvmaf/fuzz/corpus/json_model
+            max_len: 1048576
+            timeout: 30
+          - name: read_pictures
+            binary: fuzz_read_pictures
+            dict: ""
+            corpus: libvmaf/fuzz/corpus/pictures
+            max_len: 2097152
+            timeout: 60
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build nasm clang
+
+      - name: Build fuzz targets
+        run: |
+          CC=clang CXX=clang++ meson setup build_fuzz libvmaf \
+              -Denable_fuzz=true \
+              -Denable_tests=false \
+              -Db_sanitize=address,undefined \
+              -Db_lundef=false \
+              --default-library=static
+          ninja -C build_fuzz
+
+      - name: Generate seed corpus
+        run: |
+          cd libvmaf/fuzz
+          bash generate_y4m_seeds.sh
+          python3 generate_picture_seeds.py
+
+      - name: Run fuzzer
+        run: |
+          DURATION=${{ github.event_name == 'schedule' && '3600' || '120' }}
+          DICT_FLAG=""
+          if [ -n "${{ matrix.target.dict }}" ]; then
+              DICT_FLAG="-dict=${{ matrix.target.dict }}"
+          fi
+          ./build_fuzz/fuzz/${{ matrix.target.binary }} \
+              $DICT_FLAG \
+              -max_len=${{ matrix.target.max_len }} \
+              -timeout=${{ matrix.target.timeout }} \
+              -rss_limit_mb=4096 \
+              -max_total_time=$DURATION \
+              -print_final_stats=1 \
+              ${{ matrix.target.corpus }}
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-crash-${{ matrix.target.name }}
+          path: |
+            crash-*
+            leak-*
+            timeout-*

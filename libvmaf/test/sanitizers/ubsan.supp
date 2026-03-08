@@ -1,0 +1,6 @@
+# UBSan suppression file for libvmaf
+# Format: check_type:function_or_file_pattern
+# Reference: https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html#runtime-suppressions
+
+# Suppress known intentional unsigned wrap in SVM scoring
+unsigned-integer-overflow:svm.cpp

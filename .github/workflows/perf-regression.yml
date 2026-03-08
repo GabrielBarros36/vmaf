@@ -1,0 +1,124 @@
+name: Performance Regression
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      update_baseline:
+        description: 'Generate new baseline (use higher reps for stability)'
+        type: boolean
+        default: false
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  perf-bench-x86:
+    name: Benchmark (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo -E apt-get -yq install ninja-build nasm gcc g++
+          pip install meson
+
+      - name: Check AVX-512 support
+        id: avx512
+        run: |
+          if grep -q avx512 /proc/cpuinfo; then
+            echo "supported=true" >> $GITHUB_OUTPUT
+          else
+            echo "supported=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Configure
+        run: |
+          AVX512_FLAG=""
+          if [ "${{ steps.avx512.outputs.supported }}" = "true" ]; then
+            AVX512_FLAG="-Denable_avx512=true"
+          fi
+          meson setup libvmaf libvmaf/build --buildtype release \
+            -Denable_float=true $AVX512_FLAG
+
+      - name: Build
+        run: ninja -vC libvmaf/build
+
+      - name: Run benchmarks
+        run: |
+          REPS=7
+          if [ "${{ github.event.inputs.update_baseline }}" = "true" ]; then
+            REPS=15
+          fi
+          libvmaf/build/test/bench_simd_perf \
+            --output bench_current.json --reps $REPS
+
+      - name: Check for regressions
+        if: github.event.inputs.update_baseline != 'true'
+        run: |
+          BASELINE="libvmaf/test/baselines/perf_baseline_linux_x86_64.json"
+          if [ -f "$BASELINE" ]; then
+            python3 scripts/check_perf_regression.py \
+              "$BASELINE" bench_current.json
+          else
+            echo "WARNING: No baseline file found. Skipping regression check."
+            echo "Run with update_baseline=true to generate one."
+          fi
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: bench-results-linux-x86_64
+          path: bench_current.json
+
+  perf-bench-arm:
+    name: Benchmark (ARM64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo -E apt-get -yq install ninja-build gcc g++
+          pip install meson
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build --buildtype release \
+            -Denable_float=true
+
+      - name: Build
+        run: ninja -vC libvmaf/build
+
+      - name: Run benchmarks
+        run: |
+          REPS=7
+          if [ "${{ github.event.inputs.update_baseline }}" = "true" ]; then
+            REPS=15
+          fi
+          libvmaf/build/test/bench_simd_perf \
+            --output bench_current.json --reps $REPS
+
+      - name: Check for regressions
+        if: github.event.inputs.update_baseline != 'true'
+        run: |
+          BASELINE="libvmaf/test/baselines/perf_baseline_linux_aarch64.json"
+          if [ -f "$BASELINE" ]; then
+            python3 scripts/check_perf_regression.py \
+              "$BASELINE" bench_current.json
+          else
+            echo "WARNING: No baseline file found. Skipping regression check."
+          fi
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: bench-results-linux-aarch64
+          path: bench_current.json

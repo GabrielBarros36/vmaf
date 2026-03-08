@@ -1,0 +1,6 @@
+# LeakSanitizer suppressions for libvmaf
+# Format: leak:function_or_library_pattern
+# Reference: https://github.com/google/sanitizers/wiki/AddressSanitizerLeakSanitizer#suppressions
+
+# Suppress leak detection in third-party libsvm allocations
+leak:svm_

@@ -1,0 +1,176 @@
+name: Sanitizers
+
+on:
+  push:
+  pull_request:
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  asan:
+    name: AddressSanitizer
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+      ASAN_OPTIONS: >-
+        detect_leaks=1:halt_on_error=1:unmap_shadow_on_exit=1:suppressions=libvmaf/test/sanitizers/asan.supp
+      LSAN_OPTIONS: >-
+        suppressions=libvmaf/test/sanitizers/lsan.supp
+    steps:
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install meson
+          sudo apt-get update
+          sudo -E apt-get -yq install ninja-build clang nasm
+
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build_asan \
+            --buildtype=debugoptimized \
+            -Denable_float=true \
+            -Db_sanitize=address \
+            -Db_lundef=false
+
+      - name: Build
+        run: ninja -vC libvmaf/build_asan
+
+      - name: Test
+        run: |
+          meson test -C libvmaf/build_asan \
+            --timeout-multiplier 10 \
+            --print-errorlogs
+
+  ubsan:
+    name: UndefinedBehaviorSanitizer
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+      UBSAN_OPTIONS: >-
+        halt_on_error=1:print_stacktrace=1:suppressions=libvmaf/test/sanitizers/ubsan.supp
+    steps:
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install meson
+          sudo apt-get update
+          sudo -E apt-get -yq install ninja-build clang nasm
+
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build_ubsan \
+            --buildtype=debugoptimized \
+            -Denable_float=true \
+            -Db_sanitize=undefined \
+            -Db_lundef=false \
+            -Dc_args="-fno-sanitize-recover=all" \
+            -Dcpp_args="-fno-sanitize-recover=all"
+
+      - name: Build
+        run: ninja -vC libvmaf/build_ubsan
+
+      - name: Test
+        run: |
+          meson test -C libvmaf/build_ubsan \
+            --timeout-multiplier 10 \
+            --print-errorlogs
+
+  msan:
+    name: MemorySanitizer
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+      MSAN_OPTIONS: >-
+        halt_on_error=1:print_stats=1
+    steps:
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install meson
+          sudo apt-get update
+          sudo -E apt-get -yq install ninja-build clang
+
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build_msan \
+            --buildtype=debugoptimized \
+            -Denable_float=true \
+            -Denable_asm=false \
+            -Db_sanitize=memory \
+            -Db_lundef=false \
+            -Dc_args="-fsanitize-memory-track-origins=2" \
+            -Dcpp_args="-fsanitize-memory-track-origins=2"
+
+      - name: Build
+        run: ninja -vC libvmaf/build_msan
+
+      - name: Test
+        run: |
+          meson test -C libvmaf/build_msan \
+            --timeout-multiplier 10 \
+            --print-errorlogs
+
+  tsan:
+    name: ThreadSanitizer
+    runs-on: ubuntu-latest
+    env:
+      CC: clang
+      CXX: clang++
+      TSAN_OPTIONS: >-
+        halt_on_error=1:second_deadlock_stack=1:history_size=4:suppressions=libvmaf/test/sanitizers/tsan.supp
+    steps:
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install meson
+          sudo apt-get update
+          sudo -E apt-get -yq install ninja-build clang nasm
+
+      - uses: actions/checkout@v6
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build_tsan \
+            --buildtype=debugoptimized \
+            -Denable_float=true \
+            -Db_sanitize=thread \
+            -Db_lundef=false
+
+      - name: Build
+        run: ninja -vC libvmaf/build_tsan
+
+      - name: Test
+        run: |
+          meson test -C libvmaf/build_tsan \
+            --timeout-multiplier 15 \
+            --print-errorlogs

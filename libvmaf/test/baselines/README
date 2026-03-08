@@ -1,0 +1,60 @@
+Performance Regression Baselines
+=================================
+
+This directory stores baseline benchmark results for performance regression
+detection. Each file contains JSON benchmark data for a specific platform.
+
+File Naming Convention
+----------------------
+  perf_baseline_{os}_{arch}.json
+
+Examples:
+  perf_baseline_linux_x86_64.json
+  perf_baseline_linux_aarch64.json
+  perf_baseline_macos_x86_64.json
+  perf_baseline_macos_aarch64.json
+
+JSON Schema (version 1)
+-----------------------
+{
+  "schema_version": 1,
+  "platform": {
+    "os": "linux",
+    "arch": "x86_64",
+    "cpu_model": "...",
+    "runner_label": "ubuntu-latest"
+  },
+  "generated_at": "ISO 8601 timestamp",
+  "commit": "git commit hash",
+  "benchmarks": [
+    {
+      "name": "function_name",
+      "variant": "c|avx2|avx512|neon",
+      "median_ns": 0.0,
+      "min_ns": 0.0,
+      "max_ns": 0.0,
+      "mean_ns": 0.0,
+      "stddev_ns": 0.0,
+      "cv_pct": 0.0,
+      "iters_per_rep": 0,
+      "num_reps": 0
+    }
+  ]
+}
+
+Updating Baselines
+------------------
+Baselines are updated through a deliberate process:
+
+1. Run the benchmark on the target platform:
+     ./build/test/bench_simd_perf --output results.json --reps 15
+
+2. Review the results for sanity (check CV% < 5%).
+
+3. Commit the baseline file in a dedicated PR explaining why
+   the baseline is being updated.
+
+Baselines should be regenerated when:
+  - CI runner hardware changes
+  - An intentional algorithm change affects performance
+  - Initial baseline generation for a new platform

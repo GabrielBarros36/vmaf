@@ -50,6 +50,19 @@ test_model = executable('test_model',
     objects : libsvm_static_lib.extract_all_objects(recursive: true),
 )
 
+test_model_validation = executable('test_model_validation',
+    ['test.c', 'test_model_validation.c',
+     '../src/dict.c', '../src/pdjson.c',
+     '../src/read_json_model.c', '../src/log.c',
+     json_model_c_sources],
+    include_directories : [libvmaf_inc, test_inc, include_directories('../src')],
+    link_with : get_option('default_library') == 'both' ? libvmaf.get_static_lib() : libvmaf,
+    c_args : [vmaf_cflags_common,
+              '-DJSON_MODEL_PATH="' + join_paths(meson.project_source_root(), '../model/') + '"'],
+    dependencies : [thread_lib, cuda_dependency],
+    objects : libsvm_static_lib.extract_all_objects(recursive: true),
+)
+
 test_predict = executable('test_predict',
     ['test.c', 'test_predict.c', '../src/dict.c', '../src/metadata_handler.c',
      '../src/feature/feature_collector.c', '../src/feature/alias.c', '../src/model.c', '../src/log.c',
@@ -164,6 +177,7 @@ test('test_picture', test_picture)
 test('test_feature_collector', test_feature_collector)
 test('test_thread_pool', test_thread_pool)
 test('test_model', test_model)
+test('test_model_validation', test_model_validation, timeout : 300)
 test('test_predict', test_predict)
 test('test_feature_extractor', test_feature_extractor)
 test('test_dict', test_dict)
@@ -177,3 +191,122 @@ test('test_cli_parse', test_cli_parse)
 test('test_psnr', test_psnr)
 test('test_framesync', test_framesync)
 test('test_propagate_metadata', test_propagate_metadata)
+
+# Thread Safety Tests
+test_thread_safety_exe = executable('test_thread_safety',
+    ['test.c', 'test_thread_safety.c'],
+    include_directories : [libvmaf_inc, test_inc, include_directories('../src/')],
+    link_with : get_option('default_library') == 'both' ? libvmaf.get_static_lib() : libvmaf,
+    c_args : vmaf_cflags_common,
+    dependencies : [thread_lib, cuda_dependency],
+)
+
+test('test_thread_safety', test_thread_safety_exe, timeout: 120)
+
+test_thread_safety_stress_exe = executable('test_thread_safety_stress',
+    ['test.c', 'test_thread_safety.c'],
+    include_directories : [libvmaf_inc, test_inc, include_directories('../src/')],
+    link_with : get_option('default_library') == 'both' ? libvmaf.get_static_lib() : libvmaf,
+    c_args : [vmaf_cflags_common, '-DVMAF_THREAD_STRESS_EXTENDED'],
+    dependencies : [thread_lib, cuda_dependency],
+)
+
+test('test_thread_safety_stress', test_thread_safety_stress_exe,
+     timeout: 600, is_parallel: false, suite: 'stress')
+
+# Numerical Precision Differential Tests
+test_precision_differential = executable('test_precision_differential',
+    ['test.c', 'test_precision_differential.c'],
+    include_directories : [libvmaf_inc, test_inc, include_directories('../src/')],
+    link_with : get_option('default_library') == 'both' ? libvmaf.get_static_lib() : libvmaf,
+    c_args : vmaf_cflags_common,
+    dependencies : [math_lib, stdatomic_dependency, thread_lib, cuda_dependency],
+)
+test('test_precision_differential', test_precision_differential, timeout : 300)
+
+# Degenerate Input Tests
+test_degenerate_exe = executable('test_degenerate',
+    ['test.c', 'test_degenerate.c'],
+    include_directories : [libvmaf_inc, test_inc, include_directories('../src/')],
+    link_with : get_option('default_library') == 'both' ? libvmaf.get_static_lib() : libvmaf,
+    dependencies : [math_lib, thread_lib, cuda_dependency],
+)
+test('test_degenerate', test_degenerate_exe, timeout : 300)
+
+# Format and Codec Coverage Tests
+format_test_inc = include_directories('../tools/')
+
+test_format_y4m = executable('test_format_y4m',
+    ['test.c', 'test_format_y4m.c',
+     '../tools/vidinput.c', '../tools/y4m_input.c', '../tools/yuv_input.c',
+     '../src/picture.c', '../src/mem.c', '../src/ref.c'],
+    include_directories : [libvmaf_inc, test_inc,
+                           include_directories('../src/'),
+                           format_test_inc],
+    dependencies : [stdatomic_dependency, thread_lib, cuda_dependency],
+)
+
+test_format_picture = executable('test_format_picture',
+    ['test.c', 'test_format_picture.c',
+     '../src/picture.c', '../src/mem.c', '../src/ref.c'],
+    include_directories : [libvmaf_inc, test_inc,
+                           include_directories('../src/')],
+    dependencies : [stdatomic_dependency, thread_lib, cuda_dependency],
+)
+
+test('test_format_y4m', test_format_y4m, timeout : 120)
+test('test_format_picture', test_format_picture)
+
+# Cross-Architecture Golden Value Tests
+test_video_dir = join_paths(meson.project_source_root(), '..', 'python', 'test', 'resource', 'yuv') + '/'
+
+test_golden_values = executable('test_golden_values',
+    ['test.c', 'test_golden_values.c'],
+    include_directories : [libvmaf_inc, test_inc],
+    link_with : get_option('default_library') == 'both' ? libvmaf.get_static_lib() : libvmaf,
+    c_args : ['-DTEST_VIDEO_DIR="' + test_video_dir + '"'],
+    dependencies : [math_lib, thread_lib, cuda_dependency],
+)
+
+test('test_golden_values', test_golden_values, timeout: 300)
+
+# SIMD Oracle Tests
+simd_oracle_src_inc = include_directories('../src/', '../src/feature/', '../src/feature/common')
+
+simd_oracle_tests = {
+    'test_simd_adm':    'test_simd_adm.c',
+    'test_simd_vif':    'test_simd_vif.c',
+    'test_simd_motion': 'test_simd_motion.c',
+    'test_simd_cambi':  'test_simd_cambi.c',
+}
+
+foreach name, src : simd_oracle_tests
+    exe = executable(name,
+        ['test.c', src, '../src/mem.c'],
+        include_directories : [libvmaf_inc, test_inc, simd_oracle_src_inc],
+        link_with : get_option('default_library') == 'both' ? libvmaf.get_static_lib() : libvmaf,
+        dependencies : [math_lib, cuda_dependency],
+        objects : [
+            platform_specific_cpu_objects,
+        ],
+    )
+    test(name, exe)
+endforeach
+
+# Performance Regression Benchmarks
+# Registered as benchmark() — does NOT run during `ninja test`.
+# Use `ninja benchmark` or invoke the executable directly.
+bench_simd_perf = executable('bench_simd_perf',
+    ['bench_simd_perf.c', '../src/mem.c'],
+    include_directories : [libvmaf_inc, test_inc, simd_oracle_src_inc],
+    link_with : get_option('default_library') == 'both' ? libvmaf.get_static_lib() : libvmaf,
+    dependencies : [math_lib, cuda_dependency],
+    objects : [
+        platform_specific_cpu_objects,
+    ],
+)
+
+benchmark('bench_simd_perf', bench_simd_perf,
+    timeout: 600,
+    args: ['--reps', '7'],
+)
