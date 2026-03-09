@@ -15,9 +15,9 @@ jobs:
       CC: clang
       CXX: clang++
       ASAN_OPTIONS: >-
-        detect_leaks=1:halt_on_error=1:unmap_shadow_on_exit=1:suppressions=libvmaf/test/sanitizers/asan.supp
+        detect_leaks=1:halt_on_error=1:unmap_shadow_on_exit=1:suppressions=${{ github.workspace }}/libvmaf/test/sanitizers/asan.supp
       LSAN_OPTIONS: >-
-        suppressions=libvmaf/test/sanitizers/lsan.supp
+        suppressions=${{ github.workspace }}/libvmaf/test/sanitizers/lsan.supp
     steps:
       - name: Setup python
         uses: actions/setup-python@v6
@@ -57,7 +57,7 @@ jobs:
       CC: clang
       CXX: clang++
       UBSAN_OPTIONS: >-
-        halt_on_error=1:print_stacktrace=1:suppressions=libvmaf/test/sanitizers/ubsan.supp
+        halt_on_error=1:print_stacktrace=1:suppressions=${{ github.workspace }}/libvmaf/test/sanitizers/ubsan.supp
     steps:
       - name: Setup python
         uses: actions/setup-python@v6
@@ -123,8 +123,8 @@ jobs:
             -Denable_asm=false \
             -Db_sanitize=memory \
             -Db_lundef=false \
-            -Dc_args="-fsanitize-memory-track-origins=2" \
-            -Dcpp_args="-fsanitize-memory-track-origins=2"
+            -Dc_args="-fsanitize-memory-track-origins=2 -Wno-error=unused-command-line-argument" \
+            -Dcpp_args="-fsanitize-memory-track-origins=2 -Wno-error=unused-command-line-argument"
 
       - name: Build
         run: ninja -vC libvmaf/build_msan
@@ -142,7 +142,7 @@ jobs:
       CC: clang
       CXX: clang++
       TSAN_OPTIONS: >-
-        halt_on_error=1:second_deadlock_stack=1:history_size=4:suppressions=libvmaf/test/sanitizers/tsan.supp
+        halt_on_error=1:second_deadlock_stack=1:history_size=4:suppressions=${{ github.workspace }}/libvmaf/test/sanitizers/tsan.supp
     steps:
       - name: Setup python
         uses: actions/setup-python@v6
