@@ -55,4 +55,16 @@ float adm_csf_den_s123_avx2(const i4_adm_dwt_band_t *src, int scale,
 float adm_csf_den_scale_avx2(const adm_dwt_band_t *src, int w, int h,
                               int src_stride, const float csf_factors[4][2]);
 
+void adm_dwt2_s1_combined_avx2(const int16_t *i2_ref_scale,
+                                const int16_t *i2_dis_scale,
+                                AdmBuffer *buf, int w, int h,
+                                int ref_stride, int dis_stride,
+                                int dst_stride);
+
+void adm_dwt2_s123_combined_avx2(const int32_t *i4_ref_scale,
+                                  const int32_t *i4_curr_dis,
+                                  AdmBuffer *buf, int w, int h,
+                                  int ref_stride, int dis_stride,
+                                  int dst_stride, int scale);
+
 #endif /* X86_AVX2_ADM_H_ */

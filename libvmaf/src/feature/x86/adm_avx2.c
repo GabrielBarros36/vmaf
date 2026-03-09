@@ -52,6 +52,68 @@ static inline __m128i srai_epi64_15(__m128i x) {
     return _mm_or_si128(logical, sign_fill);
 }
 
+/*
+ * Signed arithmetic right shift for 256-bit vector of four int64 elements.
+ * AVX2 does not have _mm256_srai_epi64, so we implement it manually.
+ */
+static inline __m256i srai_epi64_256(__m256i x, int shift) {
+    __m256i logical = _mm256_srli_epi64(x, shift);
+    __m256i sign32 = _mm256_srai_epi32(x, 31);
+    /* Replicate high 32-bit words: positions 1,3,5,7 -> 0,1,2,3,4,5,6,7 */
+    __m256i sign64 = _mm256_shuffle_epi32(sign32, 0xF5);
+    __m256i sign_fill = _mm256_slli_epi64(sign64, 64 - shift);
+    return _mm256_or_si256(logical, sign_fill);
+}
+
+/*
+ * Multiply 8 int32 elements by a single int16 filter coefficient, accumulating
+ * into int64 pairs. Processes even and odd lanes separately using _mm256_mul_epi32.
+ * Accumulates into two __m256i vectors holding 4 int64 each (even and odd lanes).
+ */
+static inline void mul_acc_i32_coeff(
+    __m256i src, __m256i coeff32,
+    __m256i *acc_even, __m256i *acc_odd)
+{
+    /* Even lanes: elements 0,2,4,6 */
+    *acc_even = _mm256_add_epi64(*acc_even, _mm256_mul_epi32(src, coeff32));
+    /* Odd lanes: elements 1,3,5,7 - shift right by 32 bits to move odd to even position */
+    __m256i src_odd = _mm256_srli_epi64(src, 32);
+    __m256i coeff_odd = _mm256_srli_epi64(coeff32, 32);
+    *acc_odd = _mm256_add_epi64(*acc_odd, _mm256_mul_epi32(src_odd, coeff_odd));
+}
+
+/*
+ * Round-shift int64 accumulators and merge even/odd lanes back into 8 int32 results.
+ */
+static inline __m256i merge_shift_i64_to_i32(
+    __m256i acc_even, __m256i acc_odd,
+    __m256i rounding, int shift)
+{
+    acc_even = _mm256_add_epi64(acc_even, rounding);
+    acc_odd  = _mm256_add_epi64(acc_odd, rounding);
+    acc_even = srai_epi64_256(acc_even, shift);
+    acc_odd  = srai_epi64_256(acc_odd, shift);
+    /* acc_even has results in bits [31:0] of each 64-bit lane (positions 0,2,4,6)
+     * acc_odd  has results in bits [31:0] of each 64-bit lane (positions 1,3,5,7)
+     * Shift odd results left by 32 bits and OR together */
+    acc_odd = _mm256_slli_epi64(acc_odd, 32);
+    return _mm256_or_si256(acc_even, acc_odd);
+}
+
+/*
+ * Truncating merge without shift (shift=0) for scale 1 vertical pass.
+ * Just takes the low 32 bits of each int64 accumulator and interleaves.
+ */
+static inline __m256i merge_noshift_i64_to_i32(
+    __m256i acc_even, __m256i acc_odd)
+{
+    /* Mask to keep only low 32 bits of each 64-bit lane */
+    __m256i mask32 = _mm256_set1_epi64x(0xFFFFFFFF);
+    acc_even = _mm256_and_si256(acc_even, mask32);
+    acc_odd  = _mm256_slli_epi64(acc_odd, 32);
+    return _mm256_or_si256(acc_even, acc_odd);
+}
+
 void adm_dwt2_8_avx2(const uint8_t *src, const adm_dwt_band_t *dst,
                      AdmBuffer *buf, int w, int h, int src_stride,
                      int dst_stride)
@@ -665,17 +727,17 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
             __m256d t_mag_d_lo = _mm256_cvtps_pd(_mm256_castps256_ps128(t_mag_ps));
             __m256d t_mag_d_hi = _mm256_cvtps_pd(_mm256_extractf128_ps(t_mag_ps, 1));
 
-            __m256d v_4096_d = _mm256_set1_pd(4096.0);
+            __m256d v_inv_4096_d = _mm256_set1_pd(1.0 / 4096.0);
             __m256d v_zero_d = _mm256_setzero_pd();
             __m256d v_cos_d = _mm256_set1_pd((double)cos_1deg_sq);
 
-            /* ot_dp / 4096.0 */
-            __m256d dp_lo = _mm256_div_pd(ot_dp_d_lo, v_4096_d);
-            __m256d dp_hi = _mm256_div_pd(ot_dp_d_hi, v_4096_d);
-            __m256d omag_lo = _mm256_div_pd(o_mag_d_lo, v_4096_d);
-            __m256d omag_hi = _mm256_div_pd(o_mag_d_hi, v_4096_d);
-            __m256d tmag_lo = _mm256_div_pd(t_mag_d_lo, v_4096_d);
-            __m256d tmag_hi = _mm256_div_pd(t_mag_d_hi, v_4096_d);
+            /* ot_dp / 4096.0 (multiply by exact reciprocal) */
+            __m256d dp_lo = _mm256_mul_pd(ot_dp_d_lo, v_inv_4096_d);
+            __m256d dp_hi = _mm256_mul_pd(ot_dp_d_hi, v_inv_4096_d);
+            __m256d omag_lo = _mm256_mul_pd(o_mag_d_lo, v_inv_4096_d);
+            __m256d omag_hi = _mm256_mul_pd(o_mag_d_hi, v_inv_4096_d);
+            __m256d tmag_lo = _mm256_mul_pd(t_mag_d_lo, v_inv_4096_d);
+            __m256d tmag_hi = _mm256_mul_pd(t_mag_d_hi, v_inv_4096_d);
 
             /* cond1: dp >= 0 */
             __m256d cond1_lo = _mm256_cmp_pd(dp_lo, v_zero_d, _CMP_GE_OQ);
@@ -900,14 +962,14 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
                  * Process each component using float arithmetic matching C reference.
                  */
                 __m256 v_gain = _mm256_set1_ps((float)adm_enhn_gain_limit);
-                __m256 v_32768_f = _mm256_set1_ps(32768.0f);
-                __m256 v_64_f = _mm256_set1_ps(64.0f);
+                __m256 v_inv_32768_f = _mm256_set1_ps(1.0f / 32768.0f);
+                __m256 v_inv_64_f = _mm256_set1_ps(1.0f / 64.0f);
 
                 /* Helper macro-like: apply enhancement gain limit */
                 /* band_h */
                 {
-                    __m256 kh_f = _mm256_div_ps(_mm256_cvtepi32_ps(kh), v_32768_f);
-                    __m256 oh_f = _mm256_div_ps(_mm256_cvtepi32_ps(oh), v_64_f);
+                    __m256 kh_f = _mm256_mul_ps(_mm256_cvtepi32_ps(kh), v_inv_32768_f);
+                    __m256 oh_f = _mm256_mul_ps(_mm256_cvtepi32_ps(oh), v_inv_64_f);
                     __m256 rst_h_f = _mm256_mul_ps(kh_f, oh_f);
 
                     __m256 rst_h_ps = _mm256_cvtepi32_ps(rst_h);
@@ -934,8 +996,8 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
 
                 /* band_v */
                 {
-                    __m256 kv_f = _mm256_div_ps(_mm256_cvtepi32_ps(kv), v_32768_f);
-                    __m256 ov_f = _mm256_div_ps(_mm256_cvtepi32_ps(ov), v_64_f);
+                    __m256 kv_f = _mm256_mul_ps(_mm256_cvtepi32_ps(kv), v_inv_32768_f);
+                    __m256 ov_f = _mm256_mul_ps(_mm256_cvtepi32_ps(ov), v_inv_64_f);
                     __m256 rst_v_f = _mm256_mul_ps(kv_f, ov_f);
 
                     __m256 rst_v_ps = _mm256_cvtepi32_ps(rst_v);
@@ -959,8 +1021,8 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
 
                 /* band_d */
                 {
-                    __m256 kd_f = _mm256_div_ps(_mm256_cvtepi32_ps(kd), v_32768_f);
-                    __m256 od_f = _mm256_div_ps(_mm256_cvtepi32_ps(od), v_64_f);
+                    __m256 kd_f = _mm256_mul_ps(_mm256_cvtepi32_ps(kd), v_inv_32768_f);
+                    __m256 od_f = _mm256_mul_ps(_mm256_cvtepi32_ps(od), v_inv_64_f);
                     __m256 rst_d_f = _mm256_mul_ps(kd_f, od_f);
 
                     __m256 rst_d_ps = _mm256_cvtepi32_ps(rst_d);
@@ -1115,6 +1177,7 @@ static inline void get_best15_gather_avx2(
 {
     __m256i v_zero = _mm256_setzero_si256();
     __m256i v_32768 = _mm256_set1_epi32(32768);
+    __m256i v_one = _mm256_set1_epi32(1);
 
     /* Sign of original value */
     __m256i neg_mask = _mm256_cmpgt_epi32(v_zero, o);  /* all-1s where o < 0 */
@@ -1124,40 +1187,74 @@ static inline void get_best15_gather_avx2(
     __m256i abs_o = _mm256_abs_epi32(o);
 
     /*
-     * Compute per-element shift k using scalar __builtin_clz for exact matching
-     * with the C reference.  The float-exponent trick can give off-by-one errors
-     * when float rounding pushes a value to the next power of two.
+     * Compute per-element CLZ using float-exponent trick.
      *
-     * For each element:
-     *   if abs_o < 32768: k = 0, msb = abs_o
-     *   else: clz = __builtin_clz(abs_o); k = 17 - clz;
-     *         msb = (abs_o + (1 << (k-1))) >> k
+     * Converting an integer to float gives us the exponent in the IEEE 754
+     * representation, which encodes floor(log2(abs_val)).
+     * exponent_field = floor(log2(val)) + 127 (for val > 0)
+     * clz = 31 - floor(log2(val)) = 31 - (exponent_field - 127) = 158 - exponent_field
+     * k = max(0, 17 - clz) = max(0, exponent_field - 141)
+     *
+     * Caveat: cvtepi32_ps may round up past a power of 2 for certain values
+     * (e.g., 33554431 -> 33554432.0f), giving exponent off by 1 high.
+     * We fix this after computing temp by checking bit 14 of abs_o >> k.
      */
-    int32_t abs_arr[8] __attribute__((aligned(32)));
-    _mm256_store_si256((__m256i *)abs_arr, abs_o);
+    __m256 f = _mm256_cvtepi32_ps(abs_o);
+    __m256i float_bits = _mm256_castps_si256(f);
+    __m256i exponent = _mm256_srli_epi32(float_bits, 23);
+    /* clz = 158 - exponent */
+    __m256i clz = _mm256_sub_epi32(_mm256_set1_epi32(158), exponent);
+    /* k = max(0, 17 - clz) = max(0, exponent - 141) */
+    __m256i k = _mm256_max_epi32(
+        _mm256_sub_epi32(_mm256_set1_epi32(17), clz),
+        v_zero);
 
-    int32_t k_arr[8] __attribute__((aligned(32)));
-    int32_t msb_arr[8] __attribute__((aligned(32)));
+    /* For abs_o < 32768, k should be 0 */
+    __m256i small_mask = _mm256_cmpgt_epi32(v_32768, abs_o);  /* all-1s where abs_o < 32768 */
+    k = _mm256_andnot_si256(small_mask, k);  /* zero out k where abs_o < 32768 */
 
-    for (int e = 0; e < 8; ++e) {
-        uint32_t a = (uint32_t)abs_arr[e];
-        if (a < 32768) {
-            k_arr[e] = 0;
-            msb_arr[e] = (int32_t)a;
-        } else {
-            int clz = __builtin_clz(a);
-            int k = 17 - clz;
-            uint32_t rounded = (a + (1U << (k - 1))) >> k;
-            k_arr[e] = k;
-            msb_arr[e] = (int32_t)rounded;
-        }
-    }
+    /*
+     * Variable right-shift: temp = (abs_o + round) >> k
+     * round = (k > 0) ? (1 << (k-1)) : 0
+     */
+    __m256i k_minus_1 = _mm256_max_epi32(_mm256_sub_epi32(k, v_one), v_zero);
+    __m256i round_val = _mm256_sllv_epi32(v_one, k_minus_1);
+    __m256i k_nonzero = _mm256_cmpgt_epi32(k, v_zero);
+    round_val = _mm256_and_si256(round_val, k_nonzero);
+    __m256i temp = _mm256_srlv_epi32(_mm256_add_epi32(abs_o, round_val), k);
 
-    __m256i k   = _mm256_load_si256((const __m256i *)k_arr);
-    __m256i msb = _mm256_load_si256((const __m256i *)msb_arr);
+    /*
+     * Fixup for float rounding: cvtepi32_ps uses round-to-nearest-even,
+     * which can round UP past a power of 2. This makes the float exponent
+     * (and thus k) 1 too high, causing temp to be shifted too much.
+     *
+     * With round-to-nearest, the exponent can only stay correct or increase
+     * by 1 (never decrease). So k is either correct or 1 too high.
+     *
+     * To detect: for the correct k, abs_o has its MSB at bit position
+     * (14 + k), so (abs_o >> k) has bit 14 set. If k is 1 too high,
+     * (abs_o >> k) has bit 14 clear (MSB at bit 13 instead).
+     */
+    __m256i unrounded = _mm256_srlv_epi32(abs_o, k);
+    __m256i bit14 = _mm256_and_si256(unrounded, _mm256_set1_epi32(1 << 14));
+    /* k is too high where bit 14 is NOT set AND k > 0 */
+    __m256i bit14_set = _mm256_cmpeq_epi32(bit14, _mm256_set1_epi32(1 << 14));
+    __m256i k_too_high = _mm256_andnot_si256(bit14_set, k_nonzero);
+    /* Where k is too high: decrement k by 1 and recompute temp */
+    __m256i k_dec = _mm256_sub_epi32(k, v_one);
+    __m256i k_dec_m1 = _mm256_max_epi32(_mm256_sub_epi32(k_dec, v_one), v_zero);
+    __m256i round_dec = _mm256_sllv_epi32(v_one, k_dec_m1);
+    __m256i k_dec_nz = _mm256_cmpgt_epi32(k_dec, v_zero);
+    round_dec = _mm256_and_si256(round_dec, k_dec_nz);
+    __m256i temp_dec = _mm256_srlv_epi32(_mm256_add_epi32(abs_o, round_dec), k_dec);
+    k = _mm256_blendv_epi8(k, k_dec, k_too_high);
+    temp = _mm256_blendv_epi8(temp, temp_dec, k_too_high);
 
-    /* Table lookup: div_lookup[msb + 32768] */
-    __m256i idx = _mm256_add_epi32(msb, v_32768);
+    /* For abs_o < 32768, temp = abs_o (no shifting) */
+    temp = _mm256_blendv_epi8(temp, abs_o, small_mask);
+
+    /* Table lookup: div_lookup[temp + 32768] */
+    __m256i idx = _mm256_add_epi32(temp, v_32768);
     __m256i looked_up = _mm256_i32gather_epi32(div_lookup_ptr, idx, 4);
 
     *out_div = looked_up;
@@ -1383,17 +1480,17 @@ static inline __m256i compute_rst_s123(__m256i k, __m256i o) {
  */
 static inline __m256i apply_gain_limit_s123(
     __m256i rst, __m256i k, __m256i o, __m256i t,
-    __m256 angle_mask_f, __m256 v_gain,
-    __m256 v_32768_f, __m256 v_64_f, __m256 v_zero_f)
+    __m256 angle_mask_f, __m256 v_gain)
 {
-    __m256 k_f = _mm256_div_ps(_mm256_cvtepi32_ps(k), v_32768_f);
-    __m256 o_f = _mm256_div_ps(_mm256_cvtepi32_ps(o), v_64_f);
+    __m256 k_f = _mm256_mul_ps(_mm256_cvtepi32_ps(k), _mm256_set1_ps(1.0f / 32768.0f));
+    __m256 o_f = _mm256_mul_ps(_mm256_cvtepi32_ps(o), _mm256_set1_ps(1.0f / 64.0f));
     __m256 rst_f = _mm256_mul_ps(k_f, o_f);
 
     __m256 rst_ps = _mm256_cvtepi32_ps(rst);
     __m256 rst_scaled = _mm256_mul_ps(rst_ps, v_gain);
     __m256 t_f = _mm256_cvtepi32_ps(t);
 
+    __m256 v_zero_f = _mm256_setzero_ps();
     __m256 pos_mask = _mm256_cmp_ps(rst_f, v_zero_f, _CMP_GT_OQ);
     __m256 neg_mask = _mm256_cmp_ps(rst_f, v_zero_f, _CMP_LT_OQ);
 
@@ -1600,16 +1697,16 @@ void adm_decouple_s123_avx2(AdmBuffer *buf, int w, int h, int stride,
             __m256d tmag_d_lo = _mm256_cvtps_pd(_mm256_castps256_ps128(tmag_ps));
             __m256d tmag_d_hi = _mm256_cvtps_pd(_mm256_extractf128_ps(tmag_ps, 1));
 
-            __m256d v_4096_d = _mm256_set1_pd(4096.0);
+            __m256d v_inv_4096_d = _mm256_set1_pd(1.0 / 4096.0);
             __m256d v_zero_d = _mm256_setzero_pd();
             __m256d v_cos_d  = _mm256_set1_pd((double)cos_1deg_sq);
 
-            __m256d dp_lo = _mm256_div_pd(dp_d_lo, v_4096_d);
-            __m256d dp_hi = _mm256_div_pd(dp_d_hi, v_4096_d);
-            __m256d om_lo = _mm256_div_pd(omag_d_lo, v_4096_d);
-            __m256d om_hi = _mm256_div_pd(omag_d_hi, v_4096_d);
-            __m256d tm_lo = _mm256_div_pd(tmag_d_lo, v_4096_d);
-            __m256d tm_hi = _mm256_div_pd(tmag_d_hi, v_4096_d);
+            __m256d dp_lo = _mm256_mul_pd(dp_d_lo, v_inv_4096_d);
+            __m256d dp_hi = _mm256_mul_pd(dp_d_hi, v_inv_4096_d);
+            __m256d om_lo = _mm256_mul_pd(omag_d_lo, v_inv_4096_d);
+            __m256d om_hi = _mm256_mul_pd(omag_d_hi, v_inv_4096_d);
+            __m256d tm_lo = _mm256_mul_pd(tmag_d_lo, v_inv_4096_d);
+            __m256d tm_hi = _mm256_mul_pd(tmag_d_hi, v_inv_4096_d);
 
             /* cond1: dp >= 0 */
             __m256d c1_lo = _mm256_cmp_pd(dp_lo, v_zero_d, _CMP_GE_OQ);
@@ -1693,17 +1790,14 @@ void adm_decouple_s123_avx2(AdmBuffer *buf, int w, int h, int stride,
             /*
              * Enhancement gain limit.
              */
-            __m256 v_gain    = _mm256_set1_ps((float)adm_enhn_gain_limit);
-            __m256 v_32768_f = _mm256_set1_ps(32768.0f);
-            __m256 v_64_f    = _mm256_set1_ps(64.0f);
-            __m256 v_zero_f  = _mm256_setzero_ps();
+            __m256 v_gain = _mm256_set1_ps((float)adm_enhn_gain_limit);
 
             rst_h = apply_gain_limit_s123(rst_h, kh, oh, th,
-                angle_mask_f, v_gain, v_32768_f, v_64_f, v_zero_f);
+                angle_mask_f, v_gain);
             rst_v = apply_gain_limit_s123(rst_v, kv, ov, tv,
-                angle_mask_f, v_gain, v_32768_f, v_64_f, v_zero_f);
+                angle_mask_f, v_gain);
             rst_d = apply_gain_limit_s123(rst_d, kd, od, td,
-                angle_mask_f, v_gain, v_32768_f, v_64_f, v_zero_f);
+                angle_mask_f, v_gain);
 
             /* Store int32 results directly (no packing needed for i4 path) */
             _mm256_storeu_si256((__m256i *)(r->band_h + idx), rst_h);
@@ -3350,4 +3444,578 @@ float adm_csf_den_scale_avx2(const adm_dwt_band_t *RESTRICT src, int w, int h,
     float den_scale_d = powf(csf_d, 1.0f / 3.0f) + powf_add;
 
     return(den_scale_h + den_scale_v + den_scale_d);
+}
+
+/*
+ * Scalar horizontal pass helper for s1_combined and s123_combined.
+ * Processes one output pixel for one stream (ref or dis), writing to
+ * band_a, band_v, band_h, band_d at the given position.
+ */
+static inline void dwt2_horz_scalar_one(
+    const int32_t *tmplo, const int32_t *tmphi,
+    const int *j0p, const int *j1p, const int *j2p, const int *j3p,
+    const int16_t *filter_lo, const int16_t *filter_hi,
+    int32_t *band_a, int32_t *band_v, int32_t *band_h, int32_t *band_d,
+    int out_idx, int32_t add_round, int shift)
+{
+    int j0 = *j0p, j1 = *j1p, j2 = *j2p, j3 = *j3p;
+    int32_t s0, s1, s2, s3;
+    int64_t acc;
+
+    s0 = tmplo[j0]; s1 = tmplo[j1]; s2 = tmplo[j2]; s3 = tmplo[j3];
+    acc  = (int64_t)filter_lo[0] * s0;
+    acc += (int64_t)filter_lo[1] * s1;
+    acc += (int64_t)filter_lo[2] * s2;
+    acc += (int64_t)filter_lo[3] * s3;
+    band_a[out_idx] = (int32_t)((acc + add_round) >> shift);
+
+    acc  = (int64_t)filter_hi[0] * s0;
+    acc += (int64_t)filter_hi[1] * s1;
+    acc += (int64_t)filter_hi[2] * s2;
+    acc += (int64_t)filter_hi[3] * s3;
+    band_v[out_idx] = (int32_t)((acc + add_round) >> shift);
+
+    s0 = tmphi[j0]; s1 = tmphi[j1]; s2 = tmphi[j2]; s3 = tmphi[j3];
+    acc  = (int64_t)filter_lo[0] * s0;
+    acc += (int64_t)filter_lo[1] * s1;
+    acc += (int64_t)filter_lo[2] * s2;
+    acc += (int64_t)filter_lo[3] * s3;
+    band_h[out_idx] = (int32_t)((acc + add_round) >> shift);
+
+    acc  = (int64_t)filter_hi[0] * s0;
+    acc += (int64_t)filter_hi[1] * s1;
+    acc += (int64_t)filter_hi[2] * s2;
+    acc += (int64_t)filter_hi[3] * s3;
+    band_d[out_idx] = (int32_t)((acc + add_round) >> shift);
+}
+
+/*
+ * AVX2 horizontal pass for int32 intermediate -> int32 output.
+ * Processes 4 output elements at a time for one stream.
+ * Uses gather for stride-2 access pattern of the FIR filter.
+ *
+ * For interior pixels (j_start=1 to w_half-3), ind_x[k][j] = 2j + k - 1.
+ * For 4 output positions j, j+1, j+2, j+3:
+ *   tap0[n] = tmp[2(j+n) - 1]  (stride-2 starting at 2j-1)
+ *   tap1[n] = tmp[2(j+n)]      (stride-2 starting at 2j)
+ *   tap2[n] = tmp[2(j+n) + 1]  (stride-2 starting at 2j+1)
+ *   tap3[n] = tmp[2(j+n) + 2]  (stride-2 starting at 2j+2)
+ */
+static inline void dwt2_horz_avx2_4(
+    const int32_t *tmp, int base,
+    __m128i coeff0, __m128i coeff1, __m128i coeff2, __m128i coeff3,
+    __m256i rounding, int shift,
+    int32_t *out, int out_offset)
+{
+    /* Load 4 values for each tap using stride-2 access.
+     * For 4 outputs, we need: tmp[base], tmp[base+2], tmp[base+4], tmp[base+6]
+     * for tap0 (base = 2j-1). Use gather with stride-2 indices. */
+    __m128i idx = _mm_set_epi32(6, 4, 2, 0);
+
+    __m128i t0 = _mm_i32gather_epi32(tmp + base, idx, 4);
+    __m128i t1 = _mm_i32gather_epi32(tmp + base + 1, idx, 4);
+    __m128i t2 = _mm_i32gather_epi32(tmp + base + 2, idx, 4);
+    __m128i t3 = _mm_i32gather_epi32(tmp + base + 3, idx, 4);
+
+    /* Multiply each tap by its coefficient and accumulate in int64.
+     * _mm256_mul_epi32 multiplies even 32-bit lanes producing 64-bit results.
+     * For 4 elements, promote __m128i to __m256i and use _mm256_mul_epi32
+     * for even lanes, then shuffle for odd lanes. */
+
+    /* Widen tap values and coefficients to 256-bit for int64 multiplication */
+    __m256i w_t0 = _mm256_cvtepi32_epi64(t0);
+    __m256i w_t1 = _mm256_cvtepi32_epi64(t1);
+    __m256i w_t2 = _mm256_cvtepi32_epi64(t2);
+    __m256i w_t3 = _mm256_cvtepi32_epi64(t3);
+
+    __m256i w_c0 = _mm256_cvtepi32_epi64(coeff0);
+    __m256i w_c1 = _mm256_cvtepi32_epi64(coeff1);
+    __m256i w_c2 = _mm256_cvtepi32_epi64(coeff2);
+    __m256i w_c3 = _mm256_cvtepi32_epi64(coeff3);
+
+    /* Multiply-accumulate in int64: acc = c0*t0 + c1*t1 + c2*t2 + c3*t3 */
+    __m256i acc = _mm256_mul_epi32(w_t0, w_c0);  /* 4 int64 products */
+    acc = _mm256_add_epi64(acc, _mm256_mul_epi32(w_t1, w_c1));
+    acc = _mm256_add_epi64(acc, _mm256_mul_epi32(w_t2, w_c2));
+    acc = _mm256_add_epi64(acc, _mm256_mul_epi32(w_t3, w_c3));
+
+    /* Add rounding and shift */
+    acc = _mm256_add_epi64(acc, rounding);
+    acc = srai_epi64_256(acc, shift);
+
+    /* Truncate int64 -> int32: extract low 32 bits of each 64-bit lane */
+    /* Shuffle to pack: we need elements at positions 0,2,4,6 (32-bit view) */
+    __m256i shuffled = _mm256_shuffle_epi32(acc, 0x08); /* 00 00 10 00: pack pairs */
+    /* Extract 128-bit halves and combine */
+    __m128i lo = _mm256_castsi256_si128(shuffled);
+    __m128i hi = _mm256_extracti128_si256(shuffled, 1);
+    __m128i result = _mm_unpacklo_epi64(lo, hi);
+
+    _mm_storeu_si128((__m128i *)(out + out_offset), result);
+}
+
+void adm_dwt2_s1_combined_avx2(const int16_t *i2_ref_scale,
+                                const int16_t *i2_dis_scale,
+                                AdmBuffer *buf, int w, int h,
+                                int ref_stride, int dis_stride,
+                                int dst_stride)
+{
+    const i4_adm_dwt_band_t *i4_ref_dwt2 = &buf->i4_ref_dwt2;
+    const i4_adm_dwt_band_t *i4_dis_dwt2 = &buf->i4_dis_dwt2;
+    int **ind_y = buf->ind_y;
+    int **ind_x = buf->ind_x;
+
+    const int16_t *filter_lo = dwt2_db2_coeffs_lo;
+    const int16_t *filter_hi = dwt2_db2_coeffs_hi;
+
+    /* Scale 1 constants: VP shift=0, HP shift=15, HP round=16384 */
+    const int32_t add_bef_shift_round_HP = 16384;
+    const int16_t shift_HP = 15;
+
+    int32_t *tmplo_ref = buf->tmp_ref;
+    int32_t *tmphi_ref = tmplo_ref + w;
+    int32_t *tmplo_dis = tmphi_ref + w;
+    int32_t *tmphi_dis = tmplo_dis + w;
+
+    /* Broadcast filter coefficients as int32 for vertical pass mullo */
+    __m256i vf_lo0 = _mm256_set1_epi32((int32_t)filter_lo[0]);
+    __m256i vf_lo1 = _mm256_set1_epi32((int32_t)filter_lo[1]);
+    __m256i vf_lo2 = _mm256_set1_epi32((int32_t)filter_lo[2]);
+    __m256i vf_lo3 = _mm256_set1_epi32((int32_t)filter_lo[3]);
+    __m256i vf_hi0 = _mm256_set1_epi32((int32_t)filter_hi[0]);
+    __m256i vf_hi1 = _mm256_set1_epi32((int32_t)filter_hi[1]);
+    __m256i vf_hi2 = _mm256_set1_epi32((int32_t)filter_hi[2]);
+    __m256i vf_hi3 = _mm256_set1_epi32((int32_t)filter_hi[3]);
+
+    /* Coefficients for horizontal pass as 128-bit broadcasts (for 4-element processing) */
+    __m128i hc_lo0 = _mm_set1_epi32((int32_t)filter_lo[0]);
+    __m128i hc_lo1 = _mm_set1_epi32((int32_t)filter_lo[1]);
+    __m128i hc_lo2 = _mm_set1_epi32((int32_t)filter_lo[2]);
+    __m128i hc_lo3 = _mm_set1_epi32((int32_t)filter_lo[3]);
+    __m128i hc_hi0 = _mm_set1_epi32((int32_t)filter_hi[0]);
+    __m128i hc_hi1 = _mm_set1_epi32((int32_t)filter_hi[1]);
+    __m128i hc_hi2 = _mm_set1_epi32((int32_t)filter_hi[2]);
+    __m128i hc_hi3 = _mm_set1_epi32((int32_t)filter_hi[3]);
+
+    __m256i h_rounding = _mm256_set1_epi64x(add_bef_shift_round_HP);
+
+    int w_half = (w + 1) / 2;
+
+    for (int i = 0; i < (h + 1) / 2; ++i)
+    {
+        /* --- Vertical pass: int16 input -> int32 output, no shift --- */
+        const int16_t *ref_row0 = i2_ref_scale + ind_y[0][i] * ref_stride;
+        const int16_t *ref_row1 = i2_ref_scale + ind_y[1][i] * ref_stride;
+        const int16_t *ref_row2 = i2_ref_scale + ind_y[2][i] * ref_stride;
+        const int16_t *ref_row3 = i2_ref_scale + ind_y[3][i] * ref_stride;
+
+        const int16_t *dis_row0 = i2_dis_scale + ind_y[0][i] * dis_stride;
+        const int16_t *dis_row1 = i2_dis_scale + ind_y[1][i] * dis_stride;
+        const int16_t *dis_row2 = i2_dis_scale + ind_y[2][i] * dis_stride;
+        const int16_t *dis_row3 = i2_dis_scale + ind_y[3][i] * dis_stride;
+
+        int j;
+        for (j = 0; j + 7 < w; j += 8)
+        {
+            /* Load 8 int16 from each row, widen to int32 */
+            __m256i r0 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)(ref_row0 + j)));
+            __m256i r1 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)(ref_row1 + j)));
+            __m256i r2 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)(ref_row2 + j)));
+            __m256i r3 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)(ref_row3 + j)));
+
+            /* Lo filter: lo0*r0 + lo1*r1 + lo2*r2 + lo3*r3 */
+            __m256i lo_acc = _mm256_mullo_epi32(vf_lo0, r0);
+            lo_acc = _mm256_add_epi32(lo_acc, _mm256_mullo_epi32(vf_lo1, r1));
+            lo_acc = _mm256_add_epi32(lo_acc, _mm256_mullo_epi32(vf_lo2, r2));
+            lo_acc = _mm256_add_epi32(lo_acc, _mm256_mullo_epi32(vf_lo3, r3));
+            /* No shift for scale 1 vertical pass */
+            _mm256_storeu_si256((__m256i *)(tmplo_ref + j), lo_acc);
+
+            /* Hi filter */
+            __m256i hi_acc = _mm256_mullo_epi32(vf_hi0, r0);
+            hi_acc = _mm256_add_epi32(hi_acc, _mm256_mullo_epi32(vf_hi1, r1));
+            hi_acc = _mm256_add_epi32(hi_acc, _mm256_mullo_epi32(vf_hi2, r2));
+            hi_acc = _mm256_add_epi32(hi_acc, _mm256_mullo_epi32(vf_hi3, r3));
+            _mm256_storeu_si256((__m256i *)(tmphi_ref + j), hi_acc);
+
+            /* Distorted */
+            __m256i d0 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)(dis_row0 + j)));
+            __m256i d1 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)(dis_row1 + j)));
+            __m256i d2 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)(dis_row2 + j)));
+            __m256i d3 = _mm256_cvtepi16_epi32(_mm_loadu_si128((__m128i *)(dis_row3 + j)));
+
+            lo_acc = _mm256_mullo_epi32(vf_lo0, d0);
+            lo_acc = _mm256_add_epi32(lo_acc, _mm256_mullo_epi32(vf_lo1, d1));
+            lo_acc = _mm256_add_epi32(lo_acc, _mm256_mullo_epi32(vf_lo2, d2));
+            lo_acc = _mm256_add_epi32(lo_acc, _mm256_mullo_epi32(vf_lo3, d3));
+            _mm256_storeu_si256((__m256i *)(tmplo_dis + j), lo_acc);
+
+            hi_acc = _mm256_mullo_epi32(vf_hi0, d0);
+            hi_acc = _mm256_add_epi32(hi_acc, _mm256_mullo_epi32(vf_hi1, d1));
+            hi_acc = _mm256_add_epi32(hi_acc, _mm256_mullo_epi32(vf_hi2, d2));
+            hi_acc = _mm256_add_epi32(hi_acc, _mm256_mullo_epi32(vf_hi3, d3));
+            _mm256_storeu_si256((__m256i *)(tmphi_dis + j), hi_acc);
+        }
+        /* Scalar tail for vertical pass */
+        for (; j < w; ++j)
+        {
+            int32_t s0, s1, s2, s3;
+            int64_t acc;
+
+            s0 = (int32_t)ref_row0[j];
+            s1 = (int32_t)ref_row1[j];
+            s2 = (int32_t)ref_row2[j];
+            s3 = (int32_t)ref_row3[j];
+            acc = (int64_t)filter_lo[0]*s0 + (int64_t)filter_lo[1]*s1 +
+                  (int64_t)filter_lo[2]*s2 + (int64_t)filter_lo[3]*s3;
+            tmplo_ref[j] = (int32_t)acc;
+            acc = (int64_t)filter_hi[0]*s0 + (int64_t)filter_hi[1]*s1 +
+                  (int64_t)filter_hi[2]*s2 + (int64_t)filter_hi[3]*s3;
+            tmphi_ref[j] = (int32_t)acc;
+
+            s0 = (int32_t)dis_row0[j];
+            s1 = (int32_t)dis_row1[j];
+            s2 = (int32_t)dis_row2[j];
+            s3 = (int32_t)dis_row3[j];
+            acc = (int64_t)filter_lo[0]*s0 + (int64_t)filter_lo[1]*s1 +
+                  (int64_t)filter_lo[2]*s2 + (int64_t)filter_lo[3]*s3;
+            tmplo_dis[j] = (int32_t)acc;
+            acc = (int64_t)filter_hi[0]*s0 + (int64_t)filter_hi[1]*s1 +
+                  (int64_t)filter_hi[2]*s2 + (int64_t)filter_hi[3]*s3;
+            tmphi_dis[j] = (int32_t)acc;
+        }
+
+        /* --- Horizontal pass: int32 -> int32 with shift --- */
+
+        /* Boundary pixel j=0 (scalar) */
+        int out_off = i * dst_stride;
+        dwt2_horz_scalar_one(tmplo_ref, tmphi_ref,
+                             &ind_x[0][0], &ind_x[1][0], &ind_x[2][0], &ind_x[3][0],
+                             filter_lo, filter_hi,
+                             i4_ref_dwt2->band_a, i4_ref_dwt2->band_v,
+                             i4_ref_dwt2->band_h, i4_ref_dwt2->band_d,
+                             out_off, add_bef_shift_round_HP, shift_HP);
+        dwt2_horz_scalar_one(tmplo_dis, tmphi_dis,
+                             &ind_x[0][0], &ind_x[1][0], &ind_x[2][0], &ind_x[3][0],
+                             filter_lo, filter_hi,
+                             i4_dis_dwt2->band_a, i4_dis_dwt2->band_v,
+                             i4_dis_dwt2->band_h, i4_dis_dwt2->band_d,
+                             out_off, add_bef_shift_round_HP, shift_HP);
+
+        /* Interior pixels: SIMD 4 at a time */
+        int j_simd_end = w_half - 2;  /* exclusive; last 2 are boundary */
+        /* Ensure we don't go past the interior region */
+        int j_simd_stop = j_simd_end - ((j_simd_end - 1) % 4);
+        /* Process 4 outputs per iteration starting from j=1 */
+        for (j = 1; j + 3 < j_simd_end; j += 4)
+        {
+            int base = 2 * j - 1;  /* ind_x[0][j] = 2j-1 for interior */
+            /* Ref lo -> band_a */
+            dwt2_horz_avx2_4(tmplo_ref, base,
+                              hc_lo0, hc_lo1, hc_lo2, hc_lo3,
+                              h_rounding, shift_HP,
+                              i4_ref_dwt2->band_a, out_off + j);
+            /* Ref lo -> band_v */
+            dwt2_horz_avx2_4(tmplo_ref, base,
+                              hc_hi0, hc_hi1, hc_hi2, hc_hi3,
+                              h_rounding, shift_HP,
+                              i4_ref_dwt2->band_v, out_off + j);
+            /* Ref hi -> band_h */
+            dwt2_horz_avx2_4(tmphi_ref, base,
+                              hc_lo0, hc_lo1, hc_lo2, hc_lo3,
+                              h_rounding, shift_HP,
+                              i4_ref_dwt2->band_h, out_off + j);
+            /* Ref hi -> band_d */
+            dwt2_horz_avx2_4(tmphi_ref, base,
+                              hc_hi0, hc_hi1, hc_hi2, hc_hi3,
+                              h_rounding, shift_HP,
+                              i4_ref_dwt2->band_d, out_off + j);
+
+            /* Dis lo -> band_a */
+            dwt2_horz_avx2_4(tmplo_dis, base,
+                              hc_lo0, hc_lo1, hc_lo2, hc_lo3,
+                              h_rounding, shift_HP,
+                              i4_dis_dwt2->band_a, out_off + j);
+            /* Dis lo -> band_v */
+            dwt2_horz_avx2_4(tmplo_dis, base,
+                              hc_hi0, hc_hi1, hc_hi2, hc_hi3,
+                              h_rounding, shift_HP,
+                              i4_dis_dwt2->band_v, out_off + j);
+            /* Dis hi -> band_h */
+            dwt2_horz_avx2_4(tmphi_dis, base,
+                              hc_lo0, hc_lo1, hc_lo2, hc_lo3,
+                              h_rounding, shift_HP,
+                              i4_dis_dwt2->band_h, out_off + j);
+            /* Dis hi -> band_d */
+            dwt2_horz_avx2_4(tmphi_dis, base,
+                              hc_hi0, hc_hi1, hc_hi2, hc_hi3,
+                              h_rounding, shift_HP,
+                              i4_dis_dwt2->band_d, out_off + j);
+        }
+
+        /* Remaining interior + boundary pixels (scalar) */
+        for (; j < w_half; ++j)
+        {
+            dwt2_horz_scalar_one(tmplo_ref, tmphi_ref,
+                                 &ind_x[0][j], &ind_x[1][j], &ind_x[2][j], &ind_x[3][j],
+                                 filter_lo, filter_hi,
+                                 i4_ref_dwt2->band_a, i4_ref_dwt2->band_v,
+                                 i4_ref_dwt2->band_h, i4_ref_dwt2->band_d,
+                                 out_off + j, add_bef_shift_round_HP, shift_HP);
+            dwt2_horz_scalar_one(tmplo_dis, tmphi_dis,
+                                 &ind_x[0][j], &ind_x[1][j], &ind_x[2][j], &ind_x[3][j],
+                                 filter_lo, filter_hi,
+                                 i4_dis_dwt2->band_a, i4_dis_dwt2->band_v,
+                                 i4_dis_dwt2->band_h, i4_dis_dwt2->band_d,
+                                 out_off + j, add_bef_shift_round_HP, shift_HP);
+        }
+    }
+}
+
+void adm_dwt2_s123_combined_avx2(const int32_t *i4_ref_scale,
+                                  const int32_t *i4_curr_dis,
+                                  AdmBuffer *buf, int w, int h,
+                                  int ref_stride, int dis_stride,
+                                  int dst_stride, int scale)
+{
+    const i4_adm_dwt_band_t *i4_ref_dwt2 = &buf->i4_ref_dwt2;
+    const i4_adm_dwt_band_t *i4_dis_dwt2 = &buf->i4_dis_dwt2;
+    int **ind_y = buf->ind_y;
+    int **ind_x = buf->ind_x;
+
+    const int16_t *filter_lo = dwt2_db2_coeffs_lo;
+    const int16_t *filter_hi = dwt2_db2_coeffs_hi;
+
+    const int32_t add_bef_shift_round_VP[3] = { 0, 32768, 32768 };
+    const int32_t add_bef_shift_round_HP[3] = { 16384, 32768, 16384 };
+    const int16_t shift_VerticalPass[3] = { 0, 16, 16 };
+    const int16_t shift_HorizontalPass[3] = { 15, 16, 15 };
+
+    const int32_t add_VP = add_bef_shift_round_VP[scale - 1];
+    const int shift_VP = shift_VerticalPass[scale - 1];
+    const int32_t add_HP = add_bef_shift_round_HP[scale - 1];
+    const int shift_HP = shift_HorizontalPass[scale - 1];
+
+    int32_t *tmplo_ref = buf->tmp_ref;
+    int32_t *tmphi_ref = tmplo_ref + w;
+    int32_t *tmplo_dis = tmphi_ref + w;
+    int32_t *tmphi_dis = tmplo_dis + w;
+
+    /* Broadcast filter coefficients as int32 for the vertical pass */
+    __m256i vf_lo0_256 = _mm256_set1_epi32((int32_t)filter_lo[0]);
+    __m256i vf_lo1_256 = _mm256_set1_epi32((int32_t)filter_lo[1]);
+    __m256i vf_lo2_256 = _mm256_set1_epi32((int32_t)filter_lo[2]);
+    __m256i vf_lo3_256 = _mm256_set1_epi32((int32_t)filter_lo[3]);
+    __m256i vf_hi0_256 = _mm256_set1_epi32((int32_t)filter_hi[0]);
+    __m256i vf_hi1_256 = _mm256_set1_epi32((int32_t)filter_hi[1]);
+    __m256i vf_hi2_256 = _mm256_set1_epi32((int32_t)filter_hi[2]);
+    __m256i vf_hi3_256 = _mm256_set1_epi32((int32_t)filter_hi[3]);
+
+    __m256i v_rounding_vp = _mm256_set1_epi64x(add_VP);
+
+    /* Coefficients for horizontal pass as 128-bit broadcasts (for 4-element processing) */
+    __m128i hc_lo0 = _mm_set1_epi32((int32_t)filter_lo[0]);
+    __m128i hc_lo1 = _mm_set1_epi32((int32_t)filter_lo[1]);
+    __m128i hc_lo2 = _mm_set1_epi32((int32_t)filter_lo[2]);
+    __m128i hc_lo3 = _mm_set1_epi32((int32_t)filter_lo[3]);
+    __m128i hc_hi0 = _mm_set1_epi32((int32_t)filter_hi[0]);
+    __m128i hc_hi1 = _mm_set1_epi32((int32_t)filter_hi[1]);
+    __m128i hc_hi2 = _mm_set1_epi32((int32_t)filter_hi[2]);
+    __m128i hc_hi3 = _mm_set1_epi32((int32_t)filter_hi[3]);
+
+    __m256i h_rounding = _mm256_set1_epi64x(add_HP);
+
+    int w_half = (w + 1) / 2;
+
+    for (int i = 0; i < (h + 1) / 2; ++i)
+    {
+        /* --- Vertical pass: int32 input -> int32 output --- */
+        const int32_t *ref_row0 = i4_ref_scale + ind_y[0][i] * ref_stride;
+        const int32_t *ref_row1 = i4_ref_scale + ind_y[1][i] * ref_stride;
+        const int32_t *ref_row2 = i4_ref_scale + ind_y[2][i] * ref_stride;
+        const int32_t *ref_row3 = i4_ref_scale + ind_y[3][i] * ref_stride;
+
+        const int32_t *dis_row0 = i4_curr_dis + ind_y[0][i] * dis_stride;
+        const int32_t *dis_row1 = i4_curr_dis + ind_y[1][i] * dis_stride;
+        const int32_t *dis_row2 = i4_curr_dis + ind_y[2][i] * dis_stride;
+        const int32_t *dis_row3 = i4_curr_dis + ind_y[3][i] * dis_stride;
+
+        int j;
+        for (j = 0; j + 7 < w; j += 8)
+        {
+            /* Load 8 int32 from each row */
+            __m256i r0 = _mm256_loadu_si256((__m256i *)(ref_row0 + j));
+            __m256i r1 = _mm256_loadu_si256((__m256i *)(ref_row1 + j));
+            __m256i r2 = _mm256_loadu_si256((__m256i *)(ref_row2 + j));
+            __m256i r3 = _mm256_loadu_si256((__m256i *)(ref_row3 + j));
+
+            /* Lo filter: need int64 accumulation.
+             * Process even and odd lanes separately. */
+            __m256i acc_even = _mm256_setzero_si256();
+            __m256i acc_odd  = _mm256_setzero_si256();
+            mul_acc_i32_coeff(r0, vf_lo0_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(r1, vf_lo1_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(r2, vf_lo2_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(r3, vf_lo3_256, &acc_even, &acc_odd);
+
+            __m256i lo_result;
+            if (shift_VP == 0) {
+                lo_result = merge_noshift_i64_to_i32(acc_even, acc_odd);
+            } else {
+                lo_result = merge_shift_i64_to_i32(acc_even, acc_odd, v_rounding_vp, shift_VP);
+            }
+            _mm256_storeu_si256((__m256i *)(tmplo_ref + j), lo_result);
+
+            /* Hi filter */
+            acc_even = _mm256_setzero_si256();
+            acc_odd  = _mm256_setzero_si256();
+            mul_acc_i32_coeff(r0, vf_hi0_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(r1, vf_hi1_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(r2, vf_hi2_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(r3, vf_hi3_256, &acc_even, &acc_odd);
+
+            __m256i hi_result;
+            if (shift_VP == 0) {
+                hi_result = merge_noshift_i64_to_i32(acc_even, acc_odd);
+            } else {
+                hi_result = merge_shift_i64_to_i32(acc_even, acc_odd, v_rounding_vp, shift_VP);
+            }
+            _mm256_storeu_si256((__m256i *)(tmphi_ref + j), hi_result);
+
+            /* Distorted */
+            __m256i d0 = _mm256_loadu_si256((__m256i *)(dis_row0 + j));
+            __m256i d1 = _mm256_loadu_si256((__m256i *)(dis_row1 + j));
+            __m256i d2 = _mm256_loadu_si256((__m256i *)(dis_row2 + j));
+            __m256i d3 = _mm256_loadu_si256((__m256i *)(dis_row3 + j));
+
+            acc_even = _mm256_setzero_si256();
+            acc_odd  = _mm256_setzero_si256();
+            mul_acc_i32_coeff(d0, vf_lo0_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(d1, vf_lo1_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(d2, vf_lo2_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(d3, vf_lo3_256, &acc_even, &acc_odd);
+
+            if (shift_VP == 0) {
+                lo_result = merge_noshift_i64_to_i32(acc_even, acc_odd);
+            } else {
+                lo_result = merge_shift_i64_to_i32(acc_even, acc_odd, v_rounding_vp, shift_VP);
+            }
+            _mm256_storeu_si256((__m256i *)(tmplo_dis + j), lo_result);
+
+            acc_even = _mm256_setzero_si256();
+            acc_odd  = _mm256_setzero_si256();
+            mul_acc_i32_coeff(d0, vf_hi0_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(d1, vf_hi1_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(d2, vf_hi2_256, &acc_even, &acc_odd);
+            mul_acc_i32_coeff(d3, vf_hi3_256, &acc_even, &acc_odd);
+
+            if (shift_VP == 0) {
+                hi_result = merge_noshift_i64_to_i32(acc_even, acc_odd);
+            } else {
+                hi_result = merge_shift_i64_to_i32(acc_even, acc_odd, v_rounding_vp, shift_VP);
+            }
+            _mm256_storeu_si256((__m256i *)(tmphi_dis + j), hi_result);
+        }
+        /* Scalar tail for vertical pass */
+        for (; j < w; ++j)
+        {
+            int32_t s0, s1, s2, s3;
+            int64_t acc;
+
+            s0 = ref_row0[j]; s1 = ref_row1[j];
+            s2 = ref_row2[j]; s3 = ref_row3[j];
+            acc = (int64_t)filter_lo[0]*s0 + (int64_t)filter_lo[1]*s1 +
+                  (int64_t)filter_lo[2]*s2 + (int64_t)filter_lo[3]*s3;
+            tmplo_ref[j] = (int32_t)((acc + add_VP) >> shift_VP);
+            acc = (int64_t)filter_hi[0]*s0 + (int64_t)filter_hi[1]*s1 +
+                  (int64_t)filter_hi[2]*s2 + (int64_t)filter_hi[3]*s3;
+            tmphi_ref[j] = (int32_t)((acc + add_VP) >> shift_VP);
+
+            s0 = dis_row0[j]; s1 = dis_row1[j];
+            s2 = dis_row2[j]; s3 = dis_row3[j];
+            acc = (int64_t)filter_lo[0]*s0 + (int64_t)filter_lo[1]*s1 +
+                  (int64_t)filter_lo[2]*s2 + (int64_t)filter_lo[3]*s3;
+            tmplo_dis[j] = (int32_t)((acc + add_VP) >> shift_VP);
+            acc = (int64_t)filter_hi[0]*s0 + (int64_t)filter_hi[1]*s1 +
+                  (int64_t)filter_hi[2]*s2 + (int64_t)filter_hi[3]*s3;
+            tmphi_dis[j] = (int32_t)((acc + add_VP) >> shift_VP);
+        }
+
+        /* --- Horizontal pass: int32 -> int32 with shift --- */
+
+        /* Boundary pixel j=0 (scalar) */
+        int out_off = i * dst_stride;
+        dwt2_horz_scalar_one(tmplo_ref, tmphi_ref,
+                             &ind_x[0][0], &ind_x[1][0], &ind_x[2][0], &ind_x[3][0],
+                             filter_lo, filter_hi,
+                             i4_ref_dwt2->band_a, i4_ref_dwt2->band_v,
+                             i4_ref_dwt2->band_h, i4_ref_dwt2->band_d,
+                             out_off, add_HP, shift_HP);
+        dwt2_horz_scalar_one(tmplo_dis, tmphi_dis,
+                             &ind_x[0][0], &ind_x[1][0], &ind_x[2][0], &ind_x[3][0],
+                             filter_lo, filter_hi,
+                             i4_dis_dwt2->band_a, i4_dis_dwt2->band_v,
+                             i4_dis_dwt2->band_h, i4_dis_dwt2->band_d,
+                             out_off, add_HP, shift_HP);
+
+        /* Interior pixels: SIMD 4 at a time */
+        int j_simd_end = w_half - 2;
+
+        for (j = 1; j + 3 < j_simd_end; j += 4)
+        {
+            int base = 2 * j - 1;
+            /* Ref */
+            dwt2_horz_avx2_4(tmplo_ref, base,
+                              hc_lo0, hc_lo1, hc_lo2, hc_lo3,
+                              h_rounding, shift_HP,
+                              i4_ref_dwt2->band_a, out_off + j);
+            dwt2_horz_avx2_4(tmplo_ref, base,
+                              hc_hi0, hc_hi1, hc_hi2, hc_hi3,
+                              h_rounding, shift_HP,
+                              i4_ref_dwt2->band_v, out_off + j);
+            dwt2_horz_avx2_4(tmphi_ref, base,
+                              hc_lo0, hc_lo1, hc_lo2, hc_lo3,
+                              h_rounding, shift_HP,
+                              i4_ref_dwt2->band_h, out_off + j);
+            dwt2_horz_avx2_4(tmphi_ref, base,
+                              hc_hi0, hc_hi1, hc_hi2, hc_hi3,
+                              h_rounding, shift_HP,
+                              i4_ref_dwt2->band_d, out_off + j);
+
+            /* Dis */
+            dwt2_horz_avx2_4(tmplo_dis, base,
+                              hc_lo0, hc_lo1, hc_lo2, hc_lo3,
+                              h_rounding, shift_HP,
+                              i4_dis_dwt2->band_a, out_off + j);
+            dwt2_horz_avx2_4(tmplo_dis, base,
+                              hc_hi0, hc_hi1, hc_hi2, hc_hi3,
+                              h_rounding, shift_HP,
+                              i4_dis_dwt2->band_v, out_off + j);
+            dwt2_horz_avx2_4(tmphi_dis, base,
+                              hc_lo0, hc_lo1, hc_lo2, hc_lo3,
+                              h_rounding, shift_HP,
+                              i4_dis_dwt2->band_h, out_off + j);
+            dwt2_horz_avx2_4(tmphi_dis, base,
+                              hc_hi0, hc_hi1, hc_hi2, hc_hi3,
+                              h_rounding, shift_HP,
+                              i4_dis_dwt2->band_d, out_off + j);
+        }
+
+        /* Remaining interior + boundary pixels (scalar) */
+        for (; j < w_half; ++j)
+        {
+            dwt2_horz_scalar_one(tmplo_ref, tmphi_ref,
+                                 &ind_x[0][j], &ind_x[1][j], &ind_x[2][j], &ind_x[3][j],
+                                 filter_lo, filter_hi,
+                                 i4_ref_dwt2->band_a, i4_ref_dwt2->band_v,
+                                 i4_ref_dwt2->band_h, i4_ref_dwt2->band_d,
+                                 out_off + j, add_HP, shift_HP);
+            dwt2_horz_scalar_one(tmplo_dis, tmphi_dis,
+                                 &ind_x[0][j], &ind_x[1][j], &ind_x[2][j], &ind_x[3][j],
+                                 filter_lo, filter_hi,
+                                 i4_dis_dwt2->band_a, i4_dis_dwt2->band_v,
+                                 i4_dis_dwt2->band_h, i4_dis_dwt2->band_d,
+                                 out_off + j, add_HP, shift_HP);
+        }
+    }
 }
