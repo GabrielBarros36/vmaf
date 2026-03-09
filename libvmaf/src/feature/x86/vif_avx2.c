@@ -1262,26 +1262,33 @@ void vif_subsample_rd_8_avx2(VifBuffer buf, unsigned w, unsigned h) {
             __m256i refconvol6 = _mm256_alignr_epi8(refconvol8, refconvol4, 8);
             __m256i refconvol7 = _mm256_alignr_epi8(refconvol8, refconvol4, 12);
 
-            __m256i result2 = _mm256_mulhi_epu16(refconvol0, fcoeff0);
-            __m256i result2lo = _mm256_mullo_epi16(refconvol0, fcoeff0);
+            /* Symmetric-tap optimization: add paired taps before multiply.
+             * Each value is <=255 after vertical >>8, so sum <=510 fits u16. */
+            __m256i rsum08 = _mm256_add_epi32(refconvol0, refconvol8);
+            __m256i rsum17 = _mm256_add_epi32(refconvol1, refconvol7);
+            __m256i rsum26 = _mm256_add_epi32(refconvol2, refconvol6);
+            __m256i rsum35 = _mm256_add_epi32(refconvol3, refconvol5);
+
+            __m256i result2 = _mm256_mulhi_epu16(rsum08, fcoeff0);
+            __m256i result2lo = _mm256_mullo_epi16(rsum08, fcoeff0);
             accumrlo = _mm256_add_epi32(
                 accumrlo, _mm256_unpacklo_epi16(result2lo, result2));
             accumrhi = _mm256_add_epi32(
                 accumrhi, _mm256_unpackhi_epi16(result2lo, result2));
-            __m256i result3 = _mm256_mulhi_epu16(refconvol1, fcoeff1);
-            __m256i result3lo = _mm256_mullo_epi16(refconvol1, fcoeff1);
+            __m256i result3 = _mm256_mulhi_epu16(rsum17, fcoeff1);
+            __m256i result3lo = _mm256_mullo_epi16(rsum17, fcoeff1);
             accumrlo = _mm256_add_epi32(
                 accumrlo, _mm256_unpacklo_epi16(result3lo, result3));
             accumrhi = _mm256_add_epi32(
                 accumrhi, _mm256_unpackhi_epi16(result3lo, result3));
-            __m256i result4 = _mm256_mulhi_epu16(refconvol2, fcoeff2);
-            __m256i result4lo = _mm256_mullo_epi16(refconvol2, fcoeff2);
+            __m256i result4 = _mm256_mulhi_epu16(rsum26, fcoeff2);
+            __m256i result4lo = _mm256_mullo_epi16(rsum26, fcoeff2);
             accumrlo = _mm256_add_epi32(
                 accumrlo, _mm256_unpacklo_epi16(result4lo, result4));
             accumrhi = _mm256_add_epi32(
                 accumrhi, _mm256_unpackhi_epi16(result4lo, result4));
-            __m256i result5 = _mm256_mulhi_epu16(refconvol3, fcoeff3);
-            __m256i result5lo = _mm256_mullo_epi16(refconvol3, fcoeff3);
+            __m256i result5 = _mm256_mulhi_epu16(rsum35, fcoeff3);
+            __m256i result5lo = _mm256_mullo_epi16(rsum35, fcoeff3);
             accumrlo = _mm256_add_epi32(
                 accumrlo, _mm256_unpacklo_epi16(result5lo, result5));
             accumrhi = _mm256_add_epi32(
@@ -1292,30 +1299,6 @@ void vif_subsample_rd_8_avx2(VifBuffer buf, unsigned w, unsigned h) {
                 accumrlo, _mm256_unpacklo_epi16(result6lo, result6));
             accumrhi = _mm256_add_epi32(
                 accumrhi, _mm256_unpackhi_epi16(result6lo, result6));
-            __m256i result7 = _mm256_mulhi_epu16(refconvol5, fcoeff3);
-            __m256i result7lo = _mm256_mullo_epi16(refconvol5, fcoeff3);
-            accumrlo = _mm256_add_epi32(
-                accumrlo, _mm256_unpacklo_epi16(result7lo, result7));
-            accumrhi = _mm256_add_epi32(
-                accumrhi, _mm256_unpackhi_epi16(result7lo, result7));
-            __m256i result8 = _mm256_mulhi_epu16(refconvol6, fcoeff2);
-            __m256i result8lo = _mm256_mullo_epi16(refconvol6, fcoeff2);
-            accumrlo = _mm256_add_epi32(
-                accumrlo, _mm256_unpacklo_epi16(result8lo, result8));
-            accumrhi = _mm256_add_epi32(
-                accumrhi, _mm256_unpackhi_epi16(result8lo, result8));
-            __m256i result9 = _mm256_mulhi_epu16(refconvol7, fcoeff1);
-            __m256i result9lo = _mm256_mullo_epi16(refconvol7, fcoeff1);
-            accumrlo = _mm256_add_epi32(
-                accumrlo, _mm256_unpacklo_epi16(result9lo, result9));
-            accumrhi = _mm256_add_epi32(
-                accumrhi, _mm256_unpackhi_epi16(result9lo, result9));
-            __m256i result10 = _mm256_mulhi_epu16(refconvol8, fcoeff0);
-            __m256i result10lo = _mm256_mullo_epi16(refconvol8, fcoeff0);
-            accumrlo = _mm256_add_epi32(
-                accumrlo, _mm256_unpacklo_epi16(result10lo, result10));
-            accumrhi = _mm256_add_epi32(
-                accumrhi, _mm256_unpackhi_epi16(result10lo, result10));
 
             __m256i disconvol0 =_mm256_loadu_si256((__m256i *)(buf.tmp.dis_convol + jj_check));
             __m256i disconvol4 = _mm256_loadu_si256((__m256i*)(buf.tmp.dis_convol + jj_check + 4));
@@ -1326,26 +1309,32 @@ void vif_subsample_rd_8_avx2(VifBuffer buf, unsigned w, unsigned h) {
             __m256i disconvol5 = _mm256_alignr_epi8(disconvol8, disconvol4, 4);
             __m256i disconvol6 = _mm256_alignr_epi8(disconvol8, disconvol4, 8);
             __m256i disconvol7 = _mm256_alignr_epi8(disconvol8, disconvol4, 12);
-            result2 = _mm256_mulhi_epu16(disconvol0, fcoeff0);
-            result2lo = _mm256_mullo_epi16(disconvol0, fcoeff0);
+            /* Symmetric-tap optimization for dis */
+            __m256i dsum08 = _mm256_add_epi32(disconvol0, disconvol8);
+            __m256i dsum17 = _mm256_add_epi32(disconvol1, disconvol7);
+            __m256i dsum26 = _mm256_add_epi32(disconvol2, disconvol6);
+            __m256i dsum35 = _mm256_add_epi32(disconvol3, disconvol5);
+
+            result2 = _mm256_mulhi_epu16(dsum08, fcoeff0);
+            result2lo = _mm256_mullo_epi16(dsum08, fcoeff0);
             accumdlo = _mm256_add_epi32(
                 accumdlo, _mm256_unpacklo_epi16(result2lo, result2));
             accumdhi = _mm256_add_epi32(
                 accumdhi, _mm256_unpackhi_epi16(result2lo, result2));
-            result3 = _mm256_mulhi_epu16(disconvol1, fcoeff1);
-            result3lo = _mm256_mullo_epi16(disconvol1, fcoeff1);
+            result3 = _mm256_mulhi_epu16(dsum17, fcoeff1);
+            result3lo = _mm256_mullo_epi16(dsum17, fcoeff1);
             accumdlo = _mm256_add_epi32(
                 accumdlo, _mm256_unpacklo_epi16(result3lo, result3));
             accumdhi = _mm256_add_epi32(
                 accumdhi, _mm256_unpackhi_epi16(result3lo, result3));
-            result4 = _mm256_mulhi_epu16(disconvol2, fcoeff2);
-            result4lo = _mm256_mullo_epi16(disconvol2, fcoeff2);
+            result4 = _mm256_mulhi_epu16(dsum26, fcoeff2);
+            result4lo = _mm256_mullo_epi16(dsum26, fcoeff2);
             accumdlo = _mm256_add_epi32(
                 accumdlo, _mm256_unpacklo_epi16(result4lo, result4));
             accumdhi = _mm256_add_epi32(
                 accumdhi, _mm256_unpackhi_epi16(result4lo, result4));
-            result5 = _mm256_mulhi_epu16(disconvol3, fcoeff3);
-            result5lo = _mm256_mullo_epi16(disconvol3, fcoeff3);
+            result5 = _mm256_mulhi_epu16(dsum35, fcoeff3);
+            result5lo = _mm256_mullo_epi16(dsum35, fcoeff3);
             accumdlo = _mm256_add_epi32(
                 accumdlo, _mm256_unpacklo_epi16(result5lo, result5));
             accumdhi = _mm256_add_epi32(
@@ -1356,30 +1345,6 @@ void vif_subsample_rd_8_avx2(VifBuffer buf, unsigned w, unsigned h) {
                 accumdlo, _mm256_unpacklo_epi16(result6lo, result6));
             accumdhi = _mm256_add_epi32(
                 accumdhi, _mm256_unpackhi_epi16(result6lo, result6));
-            result7 = _mm256_mulhi_epu16(disconvol5, fcoeff3);
-            result7lo = _mm256_mullo_epi16(disconvol5, fcoeff3);
-            accumdlo = _mm256_add_epi32(
-                accumdlo, _mm256_unpacklo_epi16(result7lo, result7));
-            accumdhi = _mm256_add_epi32(
-                accumdhi, _mm256_unpackhi_epi16(result7lo, result7));
-            result8 = _mm256_mulhi_epu16(disconvol6, fcoeff2);
-            result8lo = _mm256_mullo_epi16(disconvol6, fcoeff2);
-            accumdlo = _mm256_add_epi32(
-                accumdlo, _mm256_unpacklo_epi16(result8lo, result8));
-            accumdhi = _mm256_add_epi32(
-                accumdhi, _mm256_unpackhi_epi16(result8lo, result8));
-            result9 = _mm256_mulhi_epu16(disconvol7, fcoeff1);
-            result9lo = _mm256_mullo_epi16(disconvol7, fcoeff1);
-            accumdlo = _mm256_add_epi32(
-                accumdlo, _mm256_unpacklo_epi16(result9lo, result9));
-            accumdhi = _mm256_add_epi32(
-                accumdhi, _mm256_unpackhi_epi16(result9lo, result9));
-            result10 = _mm256_mulhi_epu16(disconvol8, fcoeff0);
-            result10lo = _mm256_mullo_epi16(disconvol8, fcoeff0);
-            accumdlo = _mm256_add_epi32(
-                accumdlo, _mm256_unpacklo_epi16(result10lo, result10));
-            accumdhi = _mm256_add_epi32(
-                accumdhi, _mm256_unpackhi_epi16(result10lo, result10));
 
             accumdlo = _mm256_add_epi32(accumdlo, addnum);
             accumdhi = _mm256_add_epi32(accumdhi, addnum);
