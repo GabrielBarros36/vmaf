@@ -261,23 +261,42 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
                 int ii_check = i - fwidth / 2 + tap;
                 int ii_check_1 = i + fwidth / 2 - tap;
 
-                __m256i f0 = vf_epi16[tap];
+                __m256i f16 = vf_epi16[tap];
+                __m256i f32 = vf_epi32[tap];
                 __m256i r0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.ref) + (buf.stride * ii_check) + jj)));
                 __m256i r1 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.ref) + (buf.stride * (ii_check_1)) + jj)));
                 __m256i d0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.dis) + (buf.stride * ii_check) + jj)));
                 __m256i d1 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.dis) + (buf.stride * (ii_check_1)) + jj)));
 
-                // accumulate filtered r,d
-                multiply2_and_accumulate(accum_mu1_left, accum_mu1_right, r0, r1, f0);
-                multiply2_and_accumulate(accum_mu2_left, accum_mu2_right, d0, d1, f0);
+                // Interleave symmetric tap pairs for shared MADD operations
+                __m256i r_lo = _mm256_unpacklo_epi16(r0, r1);
+                __m256i r_hi = _mm256_unpackhi_epi16(r0, r1);
+                __m256i d_lo = _mm256_unpacklo_epi16(d0, d1);
+                __m256i d_hi = _mm256_unpackhi_epi16(d0, d1);
 
-                // accumulate filtered(r * r, d * d, r * d)
-                multiply3_and_accumulate(accum_ref_left, accum_ref_right, r0, r0, f0);
-                multiply3_and_accumulate(accum_ref_left, accum_ref_right, r1, r1, f0);
-                multiply3_and_accumulate(accum_dis_left, accum_dis_right, d0, d0, f0);
-                multiply3_and_accumulate(accum_dis_left, accum_dis_right, d1, d1, f0);
-                multiply3_and_accumulate(accum_ref_dis_left, accum_ref_dis_right, d0, r0, f0);
-                multiply3_and_accumulate(accum_ref_dis_left, accum_ref_dis_right, d1, r1, f0);
+                // mu filter: (r0+r1)*f, (d0+d1)*f via madd_epi16
+                accum_mu1_left = _mm256_add_epi32(accum_mu1_left, _mm256_madd_epi16(r_lo, f16));
+                accum_mu1_right = _mm256_add_epi32(accum_mu1_right, _mm256_madd_epi16(r_hi, f16));
+                accum_mu2_left = _mm256_add_epi32(accum_mu2_left, _mm256_madd_epi16(d_lo, f16));
+                accum_mu2_right = _mm256_add_epi32(accum_mu2_right, _mm256_madd_epi16(d_hi, f16));
+
+                // Squared/cross filter: madd_epi16 pre-sums symmetric pairs
+                // (r0²+r1²), (d0²+d1²), (r0*d0+r1*d1) in 32-bit, then
+                // mullo_epi32 scales by filter coeff. Replaces 6 separate
+                // multiply3_and_accumulate calls (18 mul16 ops) with 6 madd
+                // + 6 mullo_epi32 (12 ops total).
+                accum_ref_left = _mm256_add_epi32(accum_ref_left,
+                    _mm256_mullo_epi32(_mm256_madd_epi16(r_lo, r_lo), f32));
+                accum_ref_right = _mm256_add_epi32(accum_ref_right,
+                    _mm256_mullo_epi32(_mm256_madd_epi16(r_hi, r_hi), f32));
+                accum_dis_left = _mm256_add_epi32(accum_dis_left,
+                    _mm256_mullo_epi32(_mm256_madd_epi16(d_lo, d_lo), f32));
+                accum_dis_right = _mm256_add_epi32(accum_dis_right,
+                    _mm256_mullo_epi32(_mm256_madd_epi16(d_hi, d_hi), f32));
+                accum_ref_dis_left = _mm256_add_epi32(accum_ref_dis_left,
+                    _mm256_mullo_epi32(_mm256_madd_epi16(r_lo, d_lo), f32));
+                accum_ref_dis_right = _mm256_add_epi32(accum_ref_dis_right,
+                    _mm256_mullo_epi32(_mm256_madd_epi16(r_hi, d_hi), f32));
             }
 
             __m256i x = _mm256_set1_epi32(128);
