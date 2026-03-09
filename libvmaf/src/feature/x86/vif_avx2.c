@@ -112,6 +112,7 @@ acc_right = _mm256_madd_epi16(_mm256_unpackhi_epi16(r0, zero), f); \
     accum_ref_right = _mm256_add_epi32(accum_ref_right, right); \
 }
 
+
 #define shuffle_and_save(addr, x, y) \
 { \
    __m256i left = _mm256_permute2x128_si256(x, y, 0x20); \
@@ -462,43 +463,53 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
 
                 for (unsigned fj = 0; fj < fwidth / 2; ++fj) {
                     __m256i fq = vf_epi64[fj];
+                    __m256i zero = _mm256_setzero_si256();
+                    __m256i m0, m1;
 
-                    // ref: symmetric-tap pre-addition in 32-bit before unpack+multiply
-                    // Safe: buf.tmp.ref max for 8-bit is ~16.6M (255^2*256), sum ~33.3M fits 32-bit
-                    __m256i m0 = _mm256_add_epi32(
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.ref + j - fwidth / 2 + fj + 0)),
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.ref + j + fwidth / 2 - fj + 0)));
-                    __m256i m1 = _mm256_add_epi32(
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.ref + j - fwidth / 2 + fj + 8)),
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.ref + j + fwidth / 2 - fj + 8)));
-                    racc0 = _mm256_add_epi64(racc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, _mm256_setzero_si256()), fq));
-                    racc1 = _mm256_add_epi64(racc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, _mm256_setzero_si256()), fq));
-                    racc2 = _mm256_add_epi64(racc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, _mm256_setzero_si256()), fq));
-                    racc3 = _mm256_add_epi64(racc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, _mm256_setzero_si256()), fq));
+                    // ref: left side
+                    m0 = _mm256_loadu_si256((__m256i*)(buf.tmp.ref + j - fwidth / 2 + fj + 0));
+                    m1 = _mm256_loadu_si256((__m256i*)(buf.tmp.ref + j - fwidth / 2 + fj + 8));
+                    racc0 = _mm256_add_epi64(racc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, zero), fq));
+                    racc1 = _mm256_add_epi64(racc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, zero), fq));
+                    racc2 = _mm256_add_epi64(racc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, zero), fq));
+                    racc3 = _mm256_add_epi64(racc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, zero), fq));
+                    // ref: right side
+                    m0 = _mm256_loadu_si256((__m256i*)(buf.tmp.ref + j + fwidth / 2 - fj + 0));
+                    m1 = _mm256_loadu_si256((__m256i*)(buf.tmp.ref + j + fwidth / 2 - fj + 8));
+                    racc0 = _mm256_add_epi64(racc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, zero), fq));
+                    racc1 = _mm256_add_epi64(racc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, zero), fq));
+                    racc2 = _mm256_add_epi64(racc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, zero), fq));
+                    racc3 = _mm256_add_epi64(racc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, zero), fq));
 
-                    // dis: symmetric-tap pre-addition
-                    m0 = _mm256_add_epi32(
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.dis + j - fwidth / 2 + fj + 0)),
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.dis + j + fwidth / 2 - fj + 0)));
-                    m1 = _mm256_add_epi32(
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.dis + j - fwidth / 2 + fj + 8)),
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.dis + j + fwidth / 2 - fj + 8)));
-                    dacc0 = _mm256_add_epi64(dacc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, _mm256_setzero_si256()), fq));
-                    dacc1 = _mm256_add_epi64(dacc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, _mm256_setzero_si256()), fq));
-                    dacc2 = _mm256_add_epi64(dacc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, _mm256_setzero_si256()), fq));
-                    dacc3 = _mm256_add_epi64(dacc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, _mm256_setzero_si256()), fq));
+                    // dis: left side
+                    m0 = _mm256_loadu_si256((__m256i*)(buf.tmp.dis + j - fwidth / 2 + fj + 0));
+                    m1 = _mm256_loadu_si256((__m256i*)(buf.tmp.dis + j - fwidth / 2 + fj + 8));
+                    dacc0 = _mm256_add_epi64(dacc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, zero), fq));
+                    dacc1 = _mm256_add_epi64(dacc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, zero), fq));
+                    dacc2 = _mm256_add_epi64(dacc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, zero), fq));
+                    dacc3 = _mm256_add_epi64(dacc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, zero), fq));
+                    // dis: right side
+                    m0 = _mm256_loadu_si256((__m256i*)(buf.tmp.dis + j + fwidth / 2 - fj + 0));
+                    m1 = _mm256_loadu_si256((__m256i*)(buf.tmp.dis + j + fwidth / 2 - fj + 8));
+                    dacc0 = _mm256_add_epi64(dacc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, zero), fq));
+                    dacc1 = _mm256_add_epi64(dacc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, zero), fq));
+                    dacc2 = _mm256_add_epi64(dacc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, zero), fq));
+                    dacc3 = _mm256_add_epi64(dacc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, zero), fq));
 
-                    // ref_dis: symmetric-tap pre-addition
-                    m0 = _mm256_add_epi32(
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.ref_dis + j - fwidth / 2 + fj + 0)),
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.ref_dis + j + fwidth / 2 - fj + 0)));
-                    m1 = _mm256_add_epi32(
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.ref_dis + j - fwidth / 2 + fj + 8)),
-                        _mm256_loadu_si256((__m256i*)(buf.tmp.ref_dis + j + fwidth / 2 - fj + 8)));
-                    xacc0 = _mm256_add_epi64(xacc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, _mm256_setzero_si256()), fq));
-                    xacc1 = _mm256_add_epi64(xacc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, _mm256_setzero_si256()), fq));
-                    xacc2 = _mm256_add_epi64(xacc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, _mm256_setzero_si256()), fq));
-                    xacc3 = _mm256_add_epi64(xacc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, _mm256_setzero_si256()), fq));
+                    // ref_dis: left side
+                    m0 = _mm256_loadu_si256((__m256i*)(buf.tmp.ref_dis + j - fwidth / 2 + fj + 0));
+                    m1 = _mm256_loadu_si256((__m256i*)(buf.tmp.ref_dis + j - fwidth / 2 + fj + 8));
+                    xacc0 = _mm256_add_epi64(xacc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, zero), fq));
+                    xacc1 = _mm256_add_epi64(xacc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, zero), fq));
+                    xacc2 = _mm256_add_epi64(xacc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, zero), fq));
+                    xacc3 = _mm256_add_epi64(xacc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, zero), fq));
+                    // ref_dis: right side
+                    m0 = _mm256_loadu_si256((__m256i*)(buf.tmp.ref_dis + j + fwidth / 2 - fj + 0));
+                    m1 = _mm256_loadu_si256((__m256i*)(buf.tmp.ref_dis + j + fwidth / 2 - fj + 8));
+                    xacc0 = _mm256_add_epi64(xacc0, _mm256_mul_epu32(_mm256_unpacklo_epi32(m0, zero), fq));
+                    xacc1 = _mm256_add_epi64(xacc1, _mm256_mul_epu32(_mm256_unpackhi_epi32(m0, zero), fq));
+                    xacc2 = _mm256_add_epi64(xacc2, _mm256_mul_epu32(_mm256_unpacklo_epi32(m1, zero), fq));
+                    xacc3 = _mm256_add_epi64(xacc3, _mm256_mul_epu32(_mm256_unpackhi_epi32(m1, zero), fq));
                 }
 
                 // xx: shift, pack, subtract mu1sq
@@ -1011,63 +1022,121 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
                 __m256i xacc2 = _mm256_add_epi64(rounder, _mm256_mul_epu32(_mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + 8))), fq));
                 __m256i xacc3 = _mm256_add_epi64(rounder, _mm256_mul_epu32(_mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + 12))), fq));
 
-                for (unsigned fj = 0; fj < fwidth / 2; ++fj) {
-                    __m256i fq = vf_epi64[fj];
-                    __m256i t0, t1, t2, t3;
+                /* Symmetric-tap horizontal filter for ref/dis/ref_dis.
+                 * For scale > 0: pre-add left+right in 32-bit before widening to 64-bit.
+                 * Safe: at scales 1-3 with up to 12-bit content, buf.tmp.ref values
+                 * are at most ~16.8M; sum ~33.6M fits uint32.
+                 * At scale 0 with high bpc, values can reach ~4.29B so we fall back
+                 * to separate left/right processing to avoid 32-bit overflow.
+                 */
+                if (scale > 0) {
+                    for (unsigned fj = 0; fj < fwidth / 2; ++fj) {
+                        __m256i fq = vf_epi64[fj];
+                        int off_l = -(int)(fwidth / 2) + (int)fj;
+                        int off_r = (int)(fwidth / 2) - (int)fj;
+                        __m128i s0, s1, s2, s3;
 
-                    // ref
-                    t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj - fwidth / 2 + fj + 0)));
-                    t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj - fwidth / 2 + fj + 4)));
-                    t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj - fwidth / 2 + fj + 8)));
-                    t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj - fwidth / 2 + fj + 12)));
-                    racc0 = _mm256_add_epi64(racc0, _mm256_mul_epu32(t0, fq));
-                    racc1 = _mm256_add_epi64(racc1, _mm256_mul_epu32(t1, fq));
-                    racc2 = _mm256_add_epi64(racc2, _mm256_mul_epu32(t2, fq));
-                    racc3 = _mm256_add_epi64(racc3, _mm256_mul_epu32(t3, fq));
-                    t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + fwidth / 2 - fj + 0)));
-                    t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + fwidth / 2 - fj + 4)));
-                    t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + fwidth / 2 - fj + 8)));
-                    t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + fwidth / 2 - fj + 12)));
-                    racc0 = _mm256_add_epi64(racc0, _mm256_mul_epu32(t0, fq));
-                    racc1 = _mm256_add_epi64(racc1, _mm256_mul_epu32(t1, fq));
-                    racc2 = _mm256_add_epi64(racc2, _mm256_mul_epu32(t2, fq));
-                    racc3 = _mm256_add_epi64(racc3, _mm256_mul_epu32(t3, fq));
+                        // ref: pre-add symmetric taps in 32-bit
+                        s0 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + off_l + 0)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + off_r + 0)));
+                        s1 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + off_l + 4)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + off_r + 4)));
+                        s2 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + off_l + 8)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + off_r + 8)));
+                        s3 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + off_l + 12)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + off_r + 12)));
+                        racc0 = _mm256_add_epi64(racc0, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s0), fq));
+                        racc1 = _mm256_add_epi64(racc1, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s1), fq));
+                        racc2 = _mm256_add_epi64(racc2, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s2), fq));
+                        racc3 = _mm256_add_epi64(racc3, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s3), fq));
 
-                    // dis
-                    t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj - fwidth / 2 + fj + 0)));
-                    t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj - fwidth / 2 + fj + 4)));
-                    t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj - fwidth / 2 + fj + 8)));
-                    t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj - fwidth / 2 + fj + 12)));
-                    dacc0 = _mm256_add_epi64(dacc0, _mm256_mul_epu32(t0, fq));
-                    dacc1 = _mm256_add_epi64(dacc1, _mm256_mul_epu32(t1, fq));
-                    dacc2 = _mm256_add_epi64(dacc2, _mm256_mul_epu32(t2, fq));
-                    dacc3 = _mm256_add_epi64(dacc3, _mm256_mul_epu32(t3, fq));
-                    t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + fwidth / 2 - fj + 0)));
-                    t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + fwidth / 2 - fj + 4)));
-                    t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + fwidth / 2 - fj + 8)));
-                    t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + fwidth / 2 - fj + 12)));
-                    dacc0 = _mm256_add_epi64(dacc0, _mm256_mul_epu32(t0, fq));
-                    dacc1 = _mm256_add_epi64(dacc1, _mm256_mul_epu32(t1, fq));
-                    dacc2 = _mm256_add_epi64(dacc2, _mm256_mul_epu32(t2, fq));
-                    dacc3 = _mm256_add_epi64(dacc3, _mm256_mul_epu32(t3, fq));
+                        // dis: pre-add symmetric taps in 32-bit
+                        s0 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + off_l + 0)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + off_r + 0)));
+                        s1 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + off_l + 4)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + off_r + 4)));
+                        s2 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + off_l + 8)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + off_r + 8)));
+                        s3 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + off_l + 12)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + off_r + 12)));
+                        dacc0 = _mm256_add_epi64(dacc0, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s0), fq));
+                        dacc1 = _mm256_add_epi64(dacc1, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s1), fq));
+                        dacc2 = _mm256_add_epi64(dacc2, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s2), fq));
+                        dacc3 = _mm256_add_epi64(dacc3, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s3), fq));
 
-                    // ref_dis
-                    t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj - fwidth / 2 + fj + 0)));
-                    t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj - fwidth / 2 + fj + 4)));
-                    t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj - fwidth / 2 + fj + 8)));
-                    t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj - fwidth / 2 + fj + 12)));
-                    xacc0 = _mm256_add_epi64(xacc0, _mm256_mul_epu32(t0, fq));
-                    xacc1 = _mm256_add_epi64(xacc1, _mm256_mul_epu32(t1, fq));
-                    xacc2 = _mm256_add_epi64(xacc2, _mm256_mul_epu32(t2, fq));
-                    xacc3 = _mm256_add_epi64(xacc3, _mm256_mul_epu32(t3, fq));
-                    t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + fwidth / 2 - fj + 0)));
-                    t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + fwidth / 2 - fj + 4)));
-                    t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + fwidth / 2 - fj + 8)));
-                    t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + fwidth / 2 - fj + 12)));
-                    xacc0 = _mm256_add_epi64(xacc0, _mm256_mul_epu32(t0, fq));
-                    xacc1 = _mm256_add_epi64(xacc1, _mm256_mul_epu32(t1, fq));
-                    xacc2 = _mm256_add_epi64(xacc2, _mm256_mul_epu32(t2, fq));
-                    xacc3 = _mm256_add_epi64(xacc3, _mm256_mul_epu32(t3, fq));
+                        // ref_dis: pre-add symmetric taps in 32-bit
+                        s0 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + off_l + 0)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + off_r + 0)));
+                        s1 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + off_l + 4)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + off_r + 4)));
+                        s2 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + off_l + 8)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + off_r + 8)));
+                        s3 = _mm_add_epi32(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + off_l + 12)),
+                                           _mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + off_r + 12)));
+                        xacc0 = _mm256_add_epi64(xacc0, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s0), fq));
+                        xacc1 = _mm256_add_epi64(xacc1, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s1), fq));
+                        xacc2 = _mm256_add_epi64(xacc2, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s2), fq));
+                        xacc3 = _mm256_add_epi64(xacc3, _mm256_mul_epu32(_mm256_cvtepu32_epi64(s3), fq));
+                    }
+                } else {
+                    for (unsigned fj = 0; fj < fwidth / 2; ++fj) {
+                        __m256i fq = vf_epi64[fj];
+                        __m256i t0, t1, t2, t3;
+
+                        // ref (separate left/right for scale 0 overflow safety)
+                        t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj - fwidth / 2 + fj + 0)));
+                        t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj - fwidth / 2 + fj + 4)));
+                        t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj - fwidth / 2 + fj + 8)));
+                        t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj - fwidth / 2 + fj + 12)));
+                        racc0 = _mm256_add_epi64(racc0, _mm256_mul_epu32(t0, fq));
+                        racc1 = _mm256_add_epi64(racc1, _mm256_mul_epu32(t1, fq));
+                        racc2 = _mm256_add_epi64(racc2, _mm256_mul_epu32(t2, fq));
+                        racc3 = _mm256_add_epi64(racc3, _mm256_mul_epu32(t3, fq));
+                        t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + fwidth / 2 - fj + 0)));
+                        t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + fwidth / 2 - fj + 4)));
+                        t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + fwidth / 2 - fj + 8)));
+                        t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref + jj + fwidth / 2 - fj + 12)));
+                        racc0 = _mm256_add_epi64(racc0, _mm256_mul_epu32(t0, fq));
+                        racc1 = _mm256_add_epi64(racc1, _mm256_mul_epu32(t1, fq));
+                        racc2 = _mm256_add_epi64(racc2, _mm256_mul_epu32(t2, fq));
+                        racc3 = _mm256_add_epi64(racc3, _mm256_mul_epu32(t3, fq));
+
+                        // dis
+                        t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj - fwidth / 2 + fj + 0)));
+                        t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj - fwidth / 2 + fj + 4)));
+                        t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj - fwidth / 2 + fj + 8)));
+                        t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj - fwidth / 2 + fj + 12)));
+                        dacc0 = _mm256_add_epi64(dacc0, _mm256_mul_epu32(t0, fq));
+                        dacc1 = _mm256_add_epi64(dacc1, _mm256_mul_epu32(t1, fq));
+                        dacc2 = _mm256_add_epi64(dacc2, _mm256_mul_epu32(t2, fq));
+                        dacc3 = _mm256_add_epi64(dacc3, _mm256_mul_epu32(t3, fq));
+                        t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + fwidth / 2 - fj + 0)));
+                        t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + fwidth / 2 - fj + 4)));
+                        t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + fwidth / 2 - fj + 8)));
+                        t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.dis + jj + fwidth / 2 - fj + 12)));
+                        dacc0 = _mm256_add_epi64(dacc0, _mm256_mul_epu32(t0, fq));
+                        dacc1 = _mm256_add_epi64(dacc1, _mm256_mul_epu32(t1, fq));
+                        dacc2 = _mm256_add_epi64(dacc2, _mm256_mul_epu32(t2, fq));
+                        dacc3 = _mm256_add_epi64(dacc3, _mm256_mul_epu32(t3, fq));
+
+                        // ref_dis
+                        t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj - fwidth / 2 + fj + 0)));
+                        t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj - fwidth / 2 + fj + 4)));
+                        t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj - fwidth / 2 + fj + 8)));
+                        t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj - fwidth / 2 + fj + 12)));
+                        xacc0 = _mm256_add_epi64(xacc0, _mm256_mul_epu32(t0, fq));
+                        xacc1 = _mm256_add_epi64(xacc1, _mm256_mul_epu32(t1, fq));
+                        xacc2 = _mm256_add_epi64(xacc2, _mm256_mul_epu32(t2, fq));
+                        xacc3 = _mm256_add_epi64(xacc3, _mm256_mul_epu32(t3, fq));
+                        t0 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + fwidth / 2 - fj + 0)));
+                        t1 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + fwidth / 2 - fj + 4)));
+                        t2 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + fwidth / 2 - fj + 8)));
+                        t3 = _mm256_cvtepu32_epi64(_mm_loadu_si128((__m128i*)(buf.tmp.ref_dis + jj + fwidth / 2 - fj + 12)));
+                        xacc0 = _mm256_add_epi64(xacc0, _mm256_mul_epu32(t0, fq));
+                        xacc1 = _mm256_add_epi64(xacc1, _mm256_mul_epu32(t1, fq));
+                        xacc2 = _mm256_add_epi64(xacc2, _mm256_mul_epu32(t2, fq));
+                        xacc3 = _mm256_add_epi64(xacc3, _mm256_mul_epu32(t3, fq));
+                    }
                 }
 
                 // xx: shift, pack, subtract mu1sq
