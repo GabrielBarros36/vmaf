@@ -29,6 +29,9 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
                        double adm_enhn_gain_limit,
                        const int32_t *div_lookup_ptr);
 
+void adm_decouple_s123_avx2(AdmBuffer *buf, int w, int h, int stride,
+                             double adm_enhn_gain_limit);
+
 void adm_csf_avx2(AdmBuffer *buf, int w, int h, int stride,
                   uint16_t i_rfactor[3], uint8_t i_shifts[3],
                   uint16_t i_shiftsadd[3]);
@@ -41,5 +44,15 @@ float adm_cm_avx2(AdmBuffer *buf, int w, int h, int src_stride,
 float i4_adm_cm_avx2(AdmBuffer *buf, int w, int h, int src_stride,
                       int csf_a_stride, int scale,
                       const float csf_factors[4][2]);
+
+void i4_adm_csf_avx2(AdmBuffer *buf, int scale, int w, int h,
+                      int stride, const float csf_factors[4][2]);
+
+float adm_csf_den_s123_avx2(const i4_adm_dwt_band_t *src, int scale,
+                             int w, int h, int src_stride,
+                             const float csf_factors[4][2]);
+
+float adm_csf_den_scale_avx2(const adm_dwt_band_t *src, int w, int h,
+                              int src_stride, const float csf_factors[4][2]);
 
 #endif /* X86_AVX2_ADM_H_ */

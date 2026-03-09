@@ -51,11 +51,21 @@ typedef struct AdmState {
     void (*adm_decouple)(AdmBuffer *buf, int w, int h, int stride,
                          double adm_enhn_gain_limit,
                          const int32_t *div_lookup_ptr);
+    void (*adm_decouple_s123_func)(AdmBuffer *buf, int w, int h, int stride,
+                                   double adm_enhn_gain_limit);
     void (*adm_csf_func)(AdmBuffer *buf, int w, int h, int stride,
                          uint16_t i_rfactor[3], uint8_t i_shifts[3],
                          uint16_t i_shiftsadd[3]);
     adm_cm_fn adm_cm_func;
     i4_adm_cm_fn i4_adm_cm_func;
+    void (*i4_adm_csf_func)(AdmBuffer *buf, int scale, int w, int h,
+                             int stride, const float csf_factors[4][2]);
+    float (*adm_csf_den_s123_func)(const i4_adm_dwt_band_t *src, int scale,
+                                    int w, int h, int src_stride,
+                                    const float csf_factors[4][2]);
+    float (*adm_csf_den_scale_func)(const adm_dwt_band_t *src, int w, int h,
+                                     int src_stride,
+                                     const float csf_factors[4][2]);
     VmafDictionary *feature_name_dict;
 } AdmState;
 
@@ -2693,7 +2703,7 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 
 			s->adm_decouple(buf, w, h, buf_stride, adm_enhn_gain_limit, div_lookup);
 
-			den_scale = adm_csf_den_scale(&buf->ref_dwt2, w, h, buf_stride,
+			den_scale = s->adm_csf_den_scale_func(&buf->ref_dwt2, w, h, buf_stride,
                                  csf_factors);
 
 			adm_csf(buf, w, h, buf_stride, csf_factors,
@@ -2714,13 +2724,13 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
 
-			adm_decouple_s123(buf, w, h, buf_stride, adm_enhn_gain_limit);
+			s->adm_decouple_s123_func(buf, w, h, buf_stride, adm_enhn_gain_limit);
 
-			den_scale = adm_csf_den_s123(
+			den_scale = s->adm_csf_den_s123_func(
 			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
 			        csf_factors);
 
-			i4_adm_csf(buf, scale, w, h, buf_stride,
+			s->i4_adm_csf_func(buf, scale, w, h, buf_stride,
               csf_factors);
 
 			num_scale = s->i4_adm_cm_func(buf, w, h, buf_stride, buf_stride, scale,
@@ -2733,13 +2743,13 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
 
-			adm_decouple_s123(buf, w, h, buf_stride, adm_enhn_gain_limit);
+			s->adm_decouple_s123_func(buf, w, h, buf_stride, adm_enhn_gain_limit);
 
-			den_scale = adm_csf_den_s123(
+			den_scale = s->adm_csf_den_s123_func(
 			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
 			        csf_factors);
 
-			i4_adm_csf(buf, scale, w, h, buf_stride,
+			s->i4_adm_csf_func(buf, scale, w, h, buf_stride,
               csf_factors);
 
 			num_scale = s->i4_adm_cm_func(buf, w, h, buf_stride, buf_stride, scale,
@@ -2835,18 +2845,26 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
 
     s->dwt2_8 = adm_dwt2_8;
     s->adm_decouple = adm_decouple;
+    s->adm_decouple_s123_func = adm_decouple_s123;
     s->adm_csf_func = adm_csf_inner;
     s->adm_cm_func = adm_cm;
     s->i4_adm_cm_func = i4_adm_cm;
+    s->i4_adm_csf_func = i4_adm_csf;
+    s->adm_csf_den_s123_func = adm_csf_den_s123;
+    s->adm_csf_den_scale_func = adm_csf_den_scale;
 
 #if ARCH_X86
     unsigned flags = vmaf_get_cpu_flags();
     if (flags & VMAF_X86_CPU_FLAG_AVX2) {
         if (!(w % 8)) s->dwt2_8 = adm_dwt2_8_avx2;
         s->adm_decouple = adm_decouple_avx2;
+        s->adm_decouple_s123_func = adm_decouple_s123_avx2;
         s->adm_csf_func = adm_csf_avx2;
         s->adm_cm_func = adm_cm_avx2;
         s->i4_adm_cm_func = i4_adm_cm_avx2;
+        s->i4_adm_csf_func = i4_adm_csf_avx2;
+        s->adm_csf_den_s123_func = adm_csf_den_s123_avx2;
+        s->adm_csf_den_scale_func = adm_csf_den_scale_avx2;
     }
 #elif ARCH_AARCH64
     unsigned flags = vmaf_get_cpu_flags();

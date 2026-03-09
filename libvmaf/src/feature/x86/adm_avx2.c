@@ -1086,6 +1086,729 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
 }
 
 /* ================================================================
+ * AVX2 implementation of adm_decouple for scales 1-3 (int32 data).
+ *
+ * This mirrors the C reference adm_decouple_s123() in integer_adm.c.
+ * Key difference from scale 0: data is int32_t (in i4_adm_dwt_band_t)
+ * and division uses get_best15_from32() to normalise int32 denominators
+ * down to 15-bit range before table lookup.
+ * ================================================================ */
+
+/*
+ * Vectorised get_best15_from32 + table lookup for one band (8 elements).
+ *
+ * For each element:
+ *   abs_o = abs(o)
+ *   if abs_o < 32768:  msb = abs_o, shift = 0
+ *   else:  k = 17 - clz(abs_o); msb = (abs_o + (1<<(k-1))) >> k; shift = k
+ *   looked_up = div_lookup[msb + 32768]
+ *
+ * Returns looked_up values in *out_div, shift values in *out_shift.
+ * Also returns the sign mask (all-ones where o < 0) in *out_neg.
+ */
+static inline void get_best15_gather_avx2(
+    __m256i o,             /* 8 x int32 original values */
+    const int32_t *div_lookup_ptr,
+    __m256i *out_div,      /* 8 x int32 div_lookup results */
+    __m256i *out_shift,    /* 8 x int32 shift amounts (k) */
+    __m256i *out_neg)      /* 8 x int32 sign mask (all 1s where o < 0) */
+{
+    __m256i v_zero = _mm256_setzero_si256();
+    __m256i v_32768 = _mm256_set1_epi32(32768);
+
+    /* Sign of original value */
+    __m256i neg_mask = _mm256_cmpgt_epi32(v_zero, o);  /* all-1s where o < 0 */
+    *out_neg = neg_mask;
+
+    /* abs_o = abs(o) */
+    __m256i abs_o = _mm256_abs_epi32(o);
+
+    /*
+     * Compute per-element shift k using scalar __builtin_clz for exact matching
+     * with the C reference.  The float-exponent trick can give off-by-one errors
+     * when float rounding pushes a value to the next power of two.
+     *
+     * For each element:
+     *   if abs_o < 32768: k = 0, msb = abs_o
+     *   else: clz = __builtin_clz(abs_o); k = 17 - clz;
+     *         msb = (abs_o + (1 << (k-1))) >> k
+     */
+    int32_t abs_arr[8] __attribute__((aligned(32)));
+    _mm256_store_si256((__m256i *)abs_arr, abs_o);
+
+    int32_t k_arr[8] __attribute__((aligned(32)));
+    int32_t msb_arr[8] __attribute__((aligned(32)));
+
+    for (int e = 0; e < 8; ++e) {
+        uint32_t a = (uint32_t)abs_arr[e];
+        if (a < 32768) {
+            k_arr[e] = 0;
+            msb_arr[e] = (int32_t)a;
+        } else {
+            int clz = __builtin_clz(a);
+            int k = 17 - clz;
+            uint32_t rounded = (a + (1U << (k - 1))) >> k;
+            k_arr[e] = k;
+            msb_arr[e] = (int32_t)rounded;
+        }
+    }
+
+    __m256i k   = _mm256_load_si256((const __m256i *)k_arr);
+    __m256i msb = _mm256_load_si256((const __m256i *)msb_arr);
+
+    /* Table lookup: div_lookup[msb + 32768] */
+    __m256i idx = _mm256_add_epi32(msb, v_32768);
+    __m256i looked_up = _mm256_i32gather_epi32(div_lookup_ptr, idx, 4);
+
+    *out_div = looked_up;
+    *out_shift = k;
+}
+
+/*
+ * Compute tmp_k for one band with variable shift:
+ *   tmp_k = (div * t * sign + (1 << (14 + shift))) >> (15 + shift)
+ *
+ * where div = div_lookup[msb+32768], t = distorted band value,
+ * sign = +1 or -1 based on reference sign, shift = get_best15_from32 shift.
+ *
+ * This is a 64-bit operation. We process in two halves of 4 elements each,
+ * using _mm_mul_epi32 for the signed 32x32->64 multiply.
+ *
+ * For o == 0, the caller will blend in 32768 afterwards.
+ */
+static inline __m256i compute_tmp_k_s123(
+    __m256i div_val,   /* 8 x int32: div_lookup values */
+    __m256i t,         /* 8 x int32: distorted band values */
+    __m256i neg_mask,  /* 8 x int32: all-1s where ref < 0 */
+    __m256i shift)     /* 8 x int32: per-element shift amounts */
+{
+    /*
+     * In the C reference:
+     *   result = ((int64_t)div_lookup[msb+32768] * t * sign + (1 << (14+shift))) >> (15+shift)
+     *
+     * sign is +1 when ref >= 0, -1 when ref < 0.
+     * Equivalently: negate div_val where ref < 0, then multiply by t.
+     *   signed_div = (ref < 0) ? -div_val : div_val
+     *   result = (signed_div * t + round) >> total_shift
+     */
+    /* Apply sign: negate div_val where neg_mask is set */
+    __m256i neg_div = _mm256_sub_epi32(_mm256_setzero_si256(), div_val);
+    __m256i signed_div = _mm256_blendv_epi8(div_val, neg_div, neg_mask);
+
+    /* total_shift = 15 + shift */
+    __m256i total_shift = _mm256_add_epi32(_mm256_set1_epi32(15), shift);
+
+    /*
+     * Compute round = 1 << (14 + shift) = 1 << (total_shift - 1)
+     * For 64-bit: we need this as int64. Since total_shift <= 15+17 = 32,
+     * (total_shift - 1) <= 31, so the round value fits in int32, and we
+     * can sign-extend to int64.
+     */
+    __m256i ts_minus1 = _mm256_sub_epi32(total_shift, _mm256_set1_epi32(1));
+    __m256i round32 = _mm256_sllv_epi32(_mm256_set1_epi32(1), ts_minus1);
+
+    /* Process in two 128-bit halves */
+    __m128i sd_lo = _mm256_castsi256_si128(signed_div);
+    __m128i sd_hi = _mm256_extracti128_si256(signed_div, 1);
+    __m128i t_lo  = _mm256_castsi256_si128(t);
+    __m128i t_hi  = _mm256_extracti128_si256(t, 1);
+    __m128i r_lo  = _mm256_castsi256_si128(round32);
+    __m128i r_hi  = _mm256_extracti128_si256(round32, 1);
+    __m128i ts_lo = _mm256_castsi256_si128(total_shift);
+    __m128i ts_hi = _mm256_extracti128_si256(total_shift, 1);
+
+    /*
+     * For each 128-bit half, we need to multiply elements 0,1,2,3 and
+     * do a variable arithmetic right shift. _mm_mul_epi32 does elements 0,2
+     * (treating them as pairs of [low32, ignored] in each 64-bit lane).
+     * We shift inputs right by 4 bytes to access elements 1,3.
+     */
+
+    /* --- Low half (elements 0-3) --- */
+    /* Products for elements 0,2 */
+    __m128i prod_02_lo = _mm_mul_epi32(sd_lo, t_lo);
+    /* Products for elements 1,3 */
+    __m128i prod_13_lo = _mm_mul_epi32(
+        _mm_srli_si128(sd_lo, 4), _mm_srli_si128(t_lo, 4));
+
+    /* Add rounding: need round as int64 */
+    /* round32 elements are in positions 0,1,2,3 of the 128-bit register.
+     * For elements 0,2: we need round[0] as int64 in lane 0, round[2] as int64 in lane 1.
+     * _mm_cvtepi32_epi64 sign-extends elements 0,1 of the input.
+     * For elements 0,2: shuffle to put element 2 next to element 0 first. */
+    __m128i r02_lo_64 = _mm_cvtepi32_epi64(
+        _mm_shuffle_epi32(r_lo, _MM_SHUFFLE(2, 0, 2, 0)));
+    __m128i r13_lo_64 = _mm_cvtepi32_epi64(
+        _mm_shuffle_epi32(r_lo, _MM_SHUFFLE(3, 1, 3, 1)));
+
+    __m128i sum_02_lo = _mm_add_epi64(prod_02_lo, r02_lo_64);
+    __m128i sum_13_lo = _mm_add_epi64(prod_13_lo, r13_lo_64);
+
+    /* Variable arithmetic right shift by total_shift.
+     * AVX2 has _mm_srlv_epi64 (logical) but no _mm_srav_epi64 (arithmetic).
+     * We implement arithmetic right shift as:
+     *   result = (val >> shift) | (sign_extension)
+     * where sign_extension fills in the top bits with the sign bit.
+     *
+     * Extract per-element shift values as 64-bit. */
+    __m128i ts02_lo_64 = _mm_cvtepi32_epi64(
+        _mm_shuffle_epi32(ts_lo, _MM_SHUFFLE(2, 0, 2, 0)));
+    __m128i ts13_lo_64 = _mm_cvtepi32_epi64(
+        _mm_shuffle_epi32(ts_lo, _MM_SHUFFLE(3, 1, 3, 1)));
+
+    /* Arithmetic right shift for 64-bit:
+     * logical_shift = val >>> shift
+     * sign_bits = val >> 63  (all 0s or all 1s)
+     * sign_fill = sign_bits << (64 - shift)   (but only if shift > 0)
+     * result = logical_shift | sign_fill */
+    __m128i lsh_02_lo = _mm_srlv_epi64(sum_02_lo, ts02_lo_64);
+    __m128i sign_02_lo = _mm_srai_epi32(
+        _mm_shuffle_epi32(sum_02_lo, 0xF5), 31); /* broadcast high word sign */
+    sign_02_lo = _mm_shuffle_epi32(sign_02_lo, 0xF5);
+    __m128i fill_02_lo = _mm_sllv_epi64(sign_02_lo,
+        _mm_sub_epi64(_mm_set1_epi64x(64), ts02_lo_64));
+    __m128i res_02_lo = _mm_or_si128(lsh_02_lo, fill_02_lo);
+
+    __m128i lsh_13_lo = _mm_srlv_epi64(sum_13_lo, ts13_lo_64);
+    __m128i sign_13_lo = _mm_srai_epi32(
+        _mm_shuffle_epi32(sum_13_lo, 0xF5), 31);
+    sign_13_lo = _mm_shuffle_epi32(sign_13_lo, 0xF5);
+    __m128i fill_13_lo = _mm_sllv_epi64(sign_13_lo,
+        _mm_sub_epi64(_mm_set1_epi64x(64), ts13_lo_64));
+    __m128i res_13_lo = _mm_or_si128(lsh_13_lo, fill_13_lo);
+
+    /* Pack results back to int32: take low 32 bits of each 64-bit result.
+     * res_02 has [result0, X, result2, X], res_13 has [result1, X, result3, X]
+     * Shuffle to get [r0, r2, r1, r3] then reorder to [r0, r1, r2, r3]. */
+    __m128i pack_lo = _mm_castps_si128(_mm_shuffle_ps(
+        _mm_castsi128_ps(res_02_lo), _mm_castsi128_ps(res_13_lo),
+        _MM_SHUFFLE(2, 0, 2, 0)));
+    pack_lo = _mm_shuffle_epi32(pack_lo, _MM_SHUFFLE(3, 1, 2, 0));
+
+    /* --- High half (elements 4-7) --- */
+    __m128i prod_02_hi = _mm_mul_epi32(sd_hi, t_hi);
+    __m128i prod_13_hi = _mm_mul_epi32(
+        _mm_srli_si128(sd_hi, 4), _mm_srli_si128(t_hi, 4));
+
+    __m128i r02_hi_64 = _mm_cvtepi32_epi64(
+        _mm_shuffle_epi32(r_hi, _MM_SHUFFLE(2, 0, 2, 0)));
+    __m128i r13_hi_64 = _mm_cvtepi32_epi64(
+        _mm_shuffle_epi32(r_hi, _MM_SHUFFLE(3, 1, 3, 1)));
+
+    __m128i sum_02_hi = _mm_add_epi64(prod_02_hi, r02_hi_64);
+    __m128i sum_13_hi = _mm_add_epi64(prod_13_hi, r13_hi_64);
+
+    __m128i ts02_hi_64 = _mm_cvtepi32_epi64(
+        _mm_shuffle_epi32(ts_hi, _MM_SHUFFLE(2, 0, 2, 0)));
+    __m128i ts13_hi_64 = _mm_cvtepi32_epi64(
+        _mm_shuffle_epi32(ts_hi, _MM_SHUFFLE(3, 1, 3, 1)));
+
+    __m128i lsh_02_hi = _mm_srlv_epi64(sum_02_hi, ts02_hi_64);
+    __m128i sign_02_hi = _mm_srai_epi32(
+        _mm_shuffle_epi32(sum_02_hi, 0xF5), 31);
+    sign_02_hi = _mm_shuffle_epi32(sign_02_hi, 0xF5);
+    __m128i fill_02_hi = _mm_sllv_epi64(sign_02_hi,
+        _mm_sub_epi64(_mm_set1_epi64x(64), ts02_hi_64));
+    __m128i res_02_hi = _mm_or_si128(lsh_02_hi, fill_02_hi);
+
+    __m128i lsh_13_hi = _mm_srlv_epi64(sum_13_hi, ts13_hi_64);
+    __m128i sign_13_hi = _mm_srai_epi32(
+        _mm_shuffle_epi32(sum_13_hi, 0xF5), 31);
+    sign_13_hi = _mm_shuffle_epi32(sign_13_hi, 0xF5);
+    __m128i fill_13_hi = _mm_sllv_epi64(sign_13_hi,
+        _mm_sub_epi64(_mm_set1_epi64x(64), ts13_hi_64));
+    __m128i res_13_hi = _mm_or_si128(lsh_13_hi, fill_13_hi);
+
+    __m128i pack_hi = _mm_castps_si128(_mm_shuffle_ps(
+        _mm_castsi128_ps(res_02_hi), _mm_castsi128_ps(res_13_hi),
+        _MM_SHUFFLE(2, 0, 2, 0)));
+    pack_hi = _mm_shuffle_epi32(pack_hi, _MM_SHUFFLE(3, 1, 2, 0));
+
+    return _mm256_setr_m128i(pack_lo, pack_hi);
+}
+
+/*
+ * Compute rst = (k * o + 16384) >> 15 where k and o are int32,
+ * and the product can exceed int32 range, requiring 64-bit arithmetic.
+ * k is clamped to [0, 32768], o is int32.  k*o can be up to 32768 * 2^31
+ * which overflows int32 but fits in int64.
+ *
+ * We process 8 elements, returning 8 int32 results.
+ */
+static inline __m256i compute_rst_s123(__m256i k, __m256i o) {
+    __m128i k_lo = _mm256_castsi256_si128(k);
+    __m128i k_hi = _mm256_extracti128_si256(k, 1);
+    __m128i o_lo = _mm256_castsi256_si128(o);
+    __m128i o_hi = _mm256_extracti128_si256(o, 1);
+    __m128i v_16384_128 = _mm_set1_epi64x(16384);
+
+    /* Low half elements 0,2 and 1,3 */
+    __m128i prod_02_lo = _mm_mul_epi32(k_lo, o_lo);
+    __m128i prod_13_lo = _mm_mul_epi32(
+        _mm_srli_si128(k_lo, 4), _mm_srli_si128(o_lo, 4));
+
+    __m128i r02_lo = srai_epi64_15(_mm_add_epi64(prod_02_lo, v_16384_128));
+    __m128i r13_lo = srai_epi64_15(_mm_add_epi64(prod_13_lo, v_16384_128));
+
+    __m128i pack_lo = _mm_castps_si128(_mm_shuffle_ps(
+        _mm_castsi128_ps(r02_lo), _mm_castsi128_ps(r13_lo),
+        _MM_SHUFFLE(2, 0, 2, 0)));
+    pack_lo = _mm_shuffle_epi32(pack_lo, _MM_SHUFFLE(3, 1, 2, 0));
+
+    /* High half elements 4,6 and 5,7 */
+    __m128i prod_02_hi = _mm_mul_epi32(k_hi, o_hi);
+    __m128i prod_13_hi = _mm_mul_epi32(
+        _mm_srli_si128(k_hi, 4), _mm_srli_si128(o_hi, 4));
+
+    __m128i r02_hi = srai_epi64_15(_mm_add_epi64(prod_02_hi, v_16384_128));
+    __m128i r13_hi = srai_epi64_15(_mm_add_epi64(prod_13_hi, v_16384_128));
+
+    __m128i pack_hi = _mm_castps_si128(_mm_shuffle_ps(
+        _mm_castsi128_ps(r02_hi), _mm_castsi128_ps(r13_hi),
+        _MM_SHUFFLE(2, 0, 2, 0)));
+    pack_hi = _mm_shuffle_epi32(pack_hi, _MM_SHUFFLE(3, 1, 2, 0));
+
+    return _mm256_setr_m128i(pack_lo, pack_hi);
+}
+
+/*
+ * Apply enhancement gain limit for one band (s123 variant).
+ *
+ * C reference pattern:
+ *   rst_f = (k / 32768.0f) * (o / 64.0f)
+ *   if (angle_flag && rst_f > 0)  rst = MIN(rst * gain_limit, t)
+ *   if (angle_flag && rst_f < 0)  rst = MAX(rst * gain_limit, t)
+ *
+ * k, o, t are int32; rst is int32 (modified in place).
+ */
+static inline __m256i apply_gain_limit_s123(
+    __m256i rst, __m256i k, __m256i o, __m256i t,
+    __m256 angle_mask_f, __m256 v_gain,
+    __m256 v_32768_f, __m256 v_64_f, __m256 v_zero_f)
+{
+    __m256 k_f = _mm256_div_ps(_mm256_cvtepi32_ps(k), v_32768_f);
+    __m256 o_f = _mm256_div_ps(_mm256_cvtepi32_ps(o), v_64_f);
+    __m256 rst_f = _mm256_mul_ps(k_f, o_f);
+
+    __m256 rst_ps = _mm256_cvtepi32_ps(rst);
+    __m256 rst_scaled = _mm256_mul_ps(rst_ps, v_gain);
+    __m256 t_f = _mm256_cvtepi32_ps(t);
+
+    __m256 pos_mask = _mm256_cmp_ps(rst_f, v_zero_f, _CMP_GT_OQ);
+    __m256 neg_mask = _mm256_cmp_ps(rst_f, v_zero_f, _CMP_LT_OQ);
+
+    __m256 min_val = _mm256_min_ps(rst_scaled, t_f);
+    __m256 max_val = _mm256_max_ps(rst_scaled, t_f);
+
+    __m256 current = rst_ps;
+    current = _mm256_blendv_ps(current, min_val,
+        _mm256_and_ps(angle_mask_f, pos_mask));
+    current = _mm256_blendv_ps(current, max_val,
+        _mm256_and_ps(angle_mask_f, neg_mask));
+
+    return _mm256_cvttps_epi32(current);
+}
+
+void adm_decouple_s123_avx2(AdmBuffer *buf, int w, int h, int stride,
+                             double adm_enhn_gain_limit)
+{
+    const float cos_1deg_sq = (float)(cos(1.0 * M_PI / 180.0) *
+                                      cos(1.0 * M_PI / 180.0));
+
+    const i4_adm_dwt_band_t *ref = &buf->i4_ref_dwt2;
+    const i4_adm_dwt_band_t *dis = &buf->i4_dis_dwt2;
+    const i4_adm_dwt_band_t *r   = &buf->i4_decouple_r;
+    const i4_adm_dwt_band_t *a   = &buf->i4_decouple_a;
+
+    int left   = w * ADM_BORDER_FACTOR - 0.5 - 1;
+    int top    = h * ADM_BORDER_FACTOR - 0.5 - 1;
+    int right  = w - left + 2;
+    int bottom = h - top + 2;
+
+    if (left < 0)    left = 0;
+    if (right > w)   right = w;
+    if (top < 0)     top = 0;
+    if (bottom > h)  bottom = h;
+
+    /* Pointer to the file-scope div_lookup table.
+     * div_lookup is declared static in the header and generated once at init. */
+    const int32_t *div_lookup_ptr = div_lookup;
+
+    for (int i = top; i < bottom; ++i) {
+        int j = left;
+
+        /* Process 8 int32 elements per iteration */
+        for (; j + 7 < right; j += 8) {
+            const int idx = i * stride + j;
+
+            /* Load 8 x int32 for each band */
+            __m256i oh = _mm256_loadu_si256((const __m256i *)(ref->band_h + idx));
+            __m256i ov = _mm256_loadu_si256((const __m256i *)(ref->band_v + idx));
+            __m256i od = _mm256_loadu_si256((const __m256i *)(ref->band_d + idx));
+            __m256i th = _mm256_loadu_si256((const __m256i *)(dis->band_h + idx));
+            __m256i tv = _mm256_loadu_si256((const __m256i *)(dis->band_v + idx));
+            __m256i td = _mm256_loadu_si256((const __m256i *)(dis->band_d + idx));
+
+            /*
+             * Angle flag computation.
+             *
+             * C reference (s123):
+             *   ot_dp    = (int64_t)oh*th + (int64_t)ov*tv
+             *   o_mag_sq = (int64_t)oh*oh + (int64_t)ov*ov
+             *   t_mag_sq = (int64_t)th*th + (int64_t)tv*tv
+             *
+             *   angle_flag = ((float)ot_dp / 4096.0 >= 0.0f) &&
+             *     ((float)ot_dp/4096.0 * (float)ot_dp/4096.0 >=
+             *      cos_1deg_sq * (float)o_mag_sq/4096.0 * (float)t_mag_sq/4096.0)
+             *
+             * Note: (float)int64_val loses precision for large values, then
+             * / 4096.0 promotes to double. We must match this exactly.
+             *
+             * Since int32*int32 can overflow int32, we must use 64-bit products.
+             * We process element-by-element in batches of 2 using _mm_mul_epi32,
+             * convert to float (matching C's (float) cast of int64), then to double.
+             *
+             * However, for exact matching of the C cast sequence
+             * (int64 -> float -> double -> /4096.0), we need to be careful.
+             * We compute the int64 sums, convert to float (losing precision just
+             * like C does), then to double.
+             *
+             * We process 4 elements at a time (two batches of 4 for the 8-wide vector).
+             */
+
+            /* For the angle flag, we need per-element int64 dot products.
+             * Process in 4 groups of 2 elements each. */
+            __m128i oh_lo = _mm256_castsi256_si128(oh);
+            __m128i oh_hi = _mm256_extracti128_si256(oh, 1);
+            __m128i ov_lo = _mm256_castsi256_si128(ov);
+            __m128i ov_hi = _mm256_extracti128_si256(ov, 1);
+            __m128i th_lo = _mm256_castsi256_si128(th);
+            __m128i th_hi = _mm256_extracti128_si256(th, 1);
+            __m128i tv_lo = _mm256_castsi256_si128(tv);
+            __m128i tv_hi = _mm256_extracti128_si256(tv, 1);
+
+            /*
+             * _mm_mul_epi32 multiplies elements at positions 0 and 2 (the low
+             * 32 bits of each 64-bit lane), producing two int64 results.
+             * To get elements 1 and 3, we shift the register right by 4 bytes.
+             */
+
+            /* ot_dp for elements 0,2 of low half */
+            __m128i dp_02_lo = _mm_add_epi64(
+                _mm_mul_epi32(oh_lo, th_lo),
+                _mm_mul_epi32(ov_lo, tv_lo));
+            /* ot_dp for elements 1,3 of low half */
+            __m128i dp_13_lo = _mm_add_epi64(
+                _mm_mul_epi32(_mm_srli_si128(oh_lo, 4), _mm_srli_si128(th_lo, 4)),
+                _mm_mul_epi32(_mm_srli_si128(ov_lo, 4), _mm_srli_si128(tv_lo, 4)));
+            /* ot_dp for elements 0,2 of high half */
+            __m128i dp_02_hi = _mm_add_epi64(
+                _mm_mul_epi32(oh_hi, th_hi),
+                _mm_mul_epi32(ov_hi, tv_hi));
+            /* ot_dp for elements 1,3 of high half */
+            __m128i dp_13_hi = _mm_add_epi64(
+                _mm_mul_epi32(_mm_srli_si128(oh_hi, 4), _mm_srli_si128(th_hi, 4)),
+                _mm_mul_epi32(_mm_srli_si128(ov_hi, 4), _mm_srli_si128(tv_hi, 4)));
+
+            /* o_mag_sq */
+            __m128i omag_02_lo = _mm_add_epi64(
+                _mm_mul_epi32(oh_lo, oh_lo),
+                _mm_mul_epi32(ov_lo, ov_lo));
+            __m128i omag_13_lo = _mm_add_epi64(
+                _mm_mul_epi32(_mm_srli_si128(oh_lo, 4), _mm_srli_si128(oh_lo, 4)),
+                _mm_mul_epi32(_mm_srli_si128(ov_lo, 4), _mm_srli_si128(ov_lo, 4)));
+            __m128i omag_02_hi = _mm_add_epi64(
+                _mm_mul_epi32(oh_hi, oh_hi),
+                _mm_mul_epi32(ov_hi, ov_hi));
+            __m128i omag_13_hi = _mm_add_epi64(
+                _mm_mul_epi32(_mm_srli_si128(oh_hi, 4), _mm_srli_si128(oh_hi, 4)),
+                _mm_mul_epi32(_mm_srli_si128(ov_hi, 4), _mm_srli_si128(ov_hi, 4)));
+
+            /* t_mag_sq */
+            __m128i tmag_02_lo = _mm_add_epi64(
+                _mm_mul_epi32(th_lo, th_lo),
+                _mm_mul_epi32(tv_lo, tv_lo));
+            __m128i tmag_13_lo = _mm_add_epi64(
+                _mm_mul_epi32(_mm_srli_si128(th_lo, 4), _mm_srli_si128(th_lo, 4)),
+                _mm_mul_epi32(_mm_srli_si128(tv_lo, 4), _mm_srli_si128(tv_lo, 4)));
+            __m128i tmag_02_hi = _mm_add_epi64(
+                _mm_mul_epi32(th_hi, th_hi),
+                _mm_mul_epi32(tv_hi, tv_hi));
+            __m128i tmag_13_hi = _mm_add_epi64(
+                _mm_mul_epi32(_mm_srli_si128(th_hi, 4), _mm_srli_si128(th_hi, 4)),
+                _mm_mul_epi32(_mm_srli_si128(tv_hi, 4), _mm_srli_si128(tv_hi, 4)));
+
+            /*
+             * Now we have 8 sets of (ot_dp, o_mag_sq, t_mag_sq) as int64 pairs.
+             * The C code does: (float)ot_dp / 4096.0
+             * We need to convert int64 -> float (matching C's cast), then -> double.
+             *
+             * For int64 -> float: there's no single SSE/AVX2 instruction.
+             * We use scalar extraction to match the C cast exactly.
+             * This is the simplest way to guarantee bit-exact results.
+             */
+            int64_t dp_arr[8], omag_arr[8], tmag_arr[8];
+
+            /* Extract dp values: dp_02_lo has [elem0, elem2], dp_13_lo has [elem1, elem3] */
+            dp_arr[0] = _mm_extract_epi64(dp_02_lo, 0);
+            dp_arr[2] = _mm_extract_epi64(dp_02_lo, 1);
+            dp_arr[1] = _mm_extract_epi64(dp_13_lo, 0);
+            dp_arr[3] = _mm_extract_epi64(dp_13_lo, 1);
+            dp_arr[4] = _mm_extract_epi64(dp_02_hi, 0);
+            dp_arr[6] = _mm_extract_epi64(dp_02_hi, 1);
+            dp_arr[5] = _mm_extract_epi64(dp_13_hi, 0);
+            dp_arr[7] = _mm_extract_epi64(dp_13_hi, 1);
+
+            omag_arr[0] = _mm_extract_epi64(omag_02_lo, 0);
+            omag_arr[2] = _mm_extract_epi64(omag_02_lo, 1);
+            omag_arr[1] = _mm_extract_epi64(omag_13_lo, 0);
+            omag_arr[3] = _mm_extract_epi64(omag_13_lo, 1);
+            omag_arr[4] = _mm_extract_epi64(omag_02_hi, 0);
+            omag_arr[6] = _mm_extract_epi64(omag_02_hi, 1);
+            omag_arr[5] = _mm_extract_epi64(omag_13_hi, 0);
+            omag_arr[7] = _mm_extract_epi64(omag_13_hi, 1);
+
+            tmag_arr[0] = _mm_extract_epi64(tmag_02_lo, 0);
+            tmag_arr[2] = _mm_extract_epi64(tmag_02_lo, 1);
+            tmag_arr[1] = _mm_extract_epi64(tmag_13_lo, 0);
+            tmag_arr[3] = _mm_extract_epi64(tmag_13_lo, 1);
+            tmag_arr[4] = _mm_extract_epi64(tmag_02_hi, 0);
+            tmag_arr[6] = _mm_extract_epi64(tmag_02_hi, 1);
+            tmag_arr[5] = _mm_extract_epi64(tmag_13_hi, 0);
+            tmag_arr[7] = _mm_extract_epi64(tmag_13_hi, 1);
+
+            /* Compute angle flags matching C exactly:
+             *   (float)dp / 4096.0 -> double promotion
+             *   comparison in double precision */
+            float dp_f[8], omag_f[8], tmag_f[8];
+            for (int e = 0; e < 8; ++e) {
+                dp_f[e]   = (float)dp_arr[e];
+                omag_f[e] = (float)omag_arr[e];
+                tmag_f[e] = (float)tmag_arr[e];
+            }
+
+            /* Load into SIMD for the double-precision comparison */
+            __m256 dp_ps   = _mm256_loadu_ps(dp_f);
+            __m256 omag_ps = _mm256_loadu_ps(omag_f);
+            __m256 tmag_ps = _mm256_loadu_ps(tmag_f);
+
+            /* Split to double (lo/hi 4 floats) */
+            __m256d dp_d_lo   = _mm256_cvtps_pd(_mm256_castps256_ps128(dp_ps));
+            __m256d dp_d_hi   = _mm256_cvtps_pd(_mm256_extractf128_ps(dp_ps, 1));
+            __m256d omag_d_lo = _mm256_cvtps_pd(_mm256_castps256_ps128(omag_ps));
+            __m256d omag_d_hi = _mm256_cvtps_pd(_mm256_extractf128_ps(omag_ps, 1));
+            __m256d tmag_d_lo = _mm256_cvtps_pd(_mm256_castps256_ps128(tmag_ps));
+            __m256d tmag_d_hi = _mm256_cvtps_pd(_mm256_extractf128_ps(tmag_ps, 1));
+
+            __m256d v_4096_d = _mm256_set1_pd(4096.0);
+            __m256d v_zero_d = _mm256_setzero_pd();
+            __m256d v_cos_d  = _mm256_set1_pd((double)cos_1deg_sq);
+
+            __m256d dp_lo = _mm256_div_pd(dp_d_lo, v_4096_d);
+            __m256d dp_hi = _mm256_div_pd(dp_d_hi, v_4096_d);
+            __m256d om_lo = _mm256_div_pd(omag_d_lo, v_4096_d);
+            __m256d om_hi = _mm256_div_pd(omag_d_hi, v_4096_d);
+            __m256d tm_lo = _mm256_div_pd(tmag_d_lo, v_4096_d);
+            __m256d tm_hi = _mm256_div_pd(tmag_d_hi, v_4096_d);
+
+            /* cond1: dp >= 0 */
+            __m256d c1_lo = _mm256_cmp_pd(dp_lo, v_zero_d, _CMP_GE_OQ);
+            __m256d c1_hi = _mm256_cmp_pd(dp_hi, v_zero_d, _CMP_GE_OQ);
+
+            /* cond2: dp^2 >= cos_1deg_sq * omag * tmag */
+            __m256d dp_sq_lo = _mm256_mul_pd(dp_lo, dp_lo);
+            __m256d dp_sq_hi = _mm256_mul_pd(dp_hi, dp_hi);
+            __m256d mp_lo = _mm256_mul_pd(_mm256_mul_pd(v_cos_d, om_lo), tm_lo);
+            __m256d mp_hi = _mm256_mul_pd(_mm256_mul_pd(v_cos_d, om_hi), tm_hi);
+            __m256d c2_lo = _mm256_cmp_pd(dp_sq_lo, mp_lo, _CMP_GE_OQ);
+            __m256d c2_hi = _mm256_cmp_pd(dp_sq_hi, mp_hi, _CMP_GE_OQ);
+
+            __m256d angle_lo = _mm256_and_pd(c1_lo, c2_lo);
+            __m256d angle_hi = _mm256_and_pd(c1_hi, c2_hi);
+
+            int mask_lo = _mm256_movemask_pd(angle_lo);
+            int mask_hi_val = _mm256_movemask_pd(angle_hi);
+            int full_mask = mask_lo | (mask_hi_val << 4);
+
+            __m256i angle_mask = _mm256_set_epi32(
+                (full_mask & 0x80) ? -1 : 0,
+                (full_mask & 0x40) ? -1 : 0,
+                (full_mask & 0x20) ? -1 : 0,
+                (full_mask & 0x10) ? -1 : 0,
+                (full_mask & 0x08) ? -1 : 0,
+                (full_mask & 0x04) ? -1 : 0,
+                (full_mask & 0x02) ? -1 : 0,
+                (full_mask & 0x01) ? -1 : 0
+            );
+            __m256 angle_mask_f = _mm256_castsi256_ps(angle_mask);
+
+            /*
+             * Division via get_best15_from32 + table lookup.
+             */
+            __m256i v_zero  = _mm256_setzero_si256();
+            __m256i v_32768 = _mm256_set1_epi32(32768);
+
+            /* --- band_h --- */
+            __m256i div_h, shift_h, neg_h;
+            get_best15_gather_avx2(oh, div_lookup_ptr, &div_h, &shift_h, &neg_h);
+            __m256i tmp_kh = compute_tmp_k_s123(div_h, th, neg_h, shift_h);
+
+            /* Handle oh == 0: use 32768 */
+            __m256i oh_zero = _mm256_cmpeq_epi32(oh, v_zero);
+            tmp_kh = _mm256_blendv_epi8(tmp_kh, v_32768, oh_zero);
+
+            /* Clamp to [0, 32768] */
+            __m256i kh = _mm256_max_epi32(tmp_kh, v_zero);
+            kh = _mm256_min_epi32(kh, v_32768);
+
+            /* rst_h = (kh * oh + 16384) >> 15 (64-bit) */
+            __m256i rst_h = compute_rst_s123(kh, oh);
+
+            /* --- band_v --- */
+            __m256i div_v, shift_v, neg_v;
+            get_best15_gather_avx2(ov, div_lookup_ptr, &div_v, &shift_v, &neg_v);
+            __m256i tmp_kv = compute_tmp_k_s123(div_v, tv, neg_v, shift_v);
+
+            __m256i ov_zero = _mm256_cmpeq_epi32(ov, v_zero);
+            tmp_kv = _mm256_blendv_epi8(tmp_kv, v_32768, ov_zero);
+
+            __m256i kv = _mm256_max_epi32(tmp_kv, v_zero);
+            kv = _mm256_min_epi32(kv, v_32768);
+
+            __m256i rst_v = compute_rst_s123(kv, ov);
+
+            /* --- band_d --- */
+            __m256i div_d, shift_d, neg_d;
+            get_best15_gather_avx2(od, div_lookup_ptr, &div_d, &shift_d, &neg_d);
+            __m256i tmp_kd = compute_tmp_k_s123(div_d, td, neg_d, shift_d);
+
+            __m256i od_zero = _mm256_cmpeq_epi32(od, v_zero);
+            tmp_kd = _mm256_blendv_epi8(tmp_kd, v_32768, od_zero);
+
+            __m256i kd = _mm256_max_epi32(tmp_kd, v_zero);
+            kd = _mm256_min_epi32(kd, v_32768);
+
+            __m256i rst_d = compute_rst_s123(kd, od);
+
+            /*
+             * Enhancement gain limit.
+             */
+            __m256 v_gain    = _mm256_set1_ps((float)adm_enhn_gain_limit);
+            __m256 v_32768_f = _mm256_set1_ps(32768.0f);
+            __m256 v_64_f    = _mm256_set1_ps(64.0f);
+            __m256 v_zero_f  = _mm256_setzero_ps();
+
+            rst_h = apply_gain_limit_s123(rst_h, kh, oh, th,
+                angle_mask_f, v_gain, v_32768_f, v_64_f, v_zero_f);
+            rst_v = apply_gain_limit_s123(rst_v, kv, ov, tv,
+                angle_mask_f, v_gain, v_32768_f, v_64_f, v_zero_f);
+            rst_d = apply_gain_limit_s123(rst_d, kd, od, td,
+                angle_mask_f, v_gain, v_32768_f, v_64_f, v_zero_f);
+
+            /* Store int32 results directly (no packing needed for i4 path) */
+            _mm256_storeu_si256((__m256i *)(r->band_h + idx), rst_h);
+            _mm256_storeu_si256((__m256i *)(r->band_v + idx), rst_v);
+            _mm256_storeu_si256((__m256i *)(r->band_d + idx), rst_d);
+
+            _mm256_storeu_si256((__m256i *)(a->band_h + idx),
+                _mm256_sub_epi32(th, rst_h));
+            _mm256_storeu_si256((__m256i *)(a->band_v + idx),
+                _mm256_sub_epi32(tv, rst_v));
+            _mm256_storeu_si256((__m256i *)(a->band_d + idx),
+                _mm256_sub_epi32(td, rst_d));
+        }
+
+        /* Scalar tail for remaining elements */
+        for (; j < right; ++j) {
+            const int idx = i * stride + j;
+
+            int32_t oh_s = ref->band_h[idx];
+            int32_t ov_s = ref->band_v[idx];
+            int32_t od_s = ref->band_d[idx];
+            int32_t th_s = dis->band_h[idx];
+            int32_t tv_s = dis->band_v[idx];
+            int32_t td_s = dis->band_d[idx];
+            int32_t rst_h_s, rst_v_s, rst_d_s;
+
+            int64_t ot_dp    = (int64_t)oh_s * th_s + (int64_t)ov_s * tv_s;
+            int64_t o_mag_sq = (int64_t)oh_s * oh_s + (int64_t)ov_s * ov_s;
+            int64_t t_mag_sq = (int64_t)th_s * th_s + (int64_t)tv_s * tv_s;
+
+            int angle_flag = (((float)ot_dp / 4096.0) >= 0.0f) &&
+                (((float)ot_dp / 4096.0) * ((float)ot_dp / 4096.0) >=
+                    cos_1deg_sq * ((float)o_mag_sq / 4096.0) *
+                    ((float)t_mag_sq / 4096.0));
+
+            int32_t kh_shift = 0, kv_shift = 0, kd_shift = 0;
+
+            uint32_t abs_oh = abs(oh_s);
+            uint32_t abs_ov = abs(ov_s);
+            uint32_t abs_od = abs(od_s);
+
+            int8_t kh_sign = (oh_s < 0 ? -1 : 1);
+            int8_t kv_sign = (ov_s < 0 ? -1 : 1);
+            int8_t kd_sign = (od_s < 0 ? -1 : 1);
+
+            uint16_t kh_msb, kv_msb, kd_msb;
+            if (abs_oh < 32768) { kh_msb = abs_oh; }
+            else { int k = __builtin_clz(abs_oh); k = 17 - k;
+                   abs_oh = (abs_oh + (1 << (k - 1))) >> k; kh_shift = k; kh_msb = abs_oh; }
+            if (abs_ov < 32768) { kv_msb = abs_ov; }
+            else { int k = __builtin_clz(abs_ov); k = 17 - k;
+                   abs_ov = (abs_ov + (1 << (k - 1))) >> k; kv_shift = k; kv_msb = abs_ov; }
+            if (abs_od < 32768) { kd_msb = abs_od; }
+            else { int k = __builtin_clz(abs_od); k = 17 - k;
+                   abs_od = (abs_od + (1 << (k - 1))) >> k; kd_shift = k; kd_msb = abs_od; }
+
+            int64_t tmp_kh_s = (oh_s == 0) ? 32768 :
+                (((int64_t)div_lookup_ptr[kh_msb + 32768] * th_s) * kh_sign +
+                 (1 << (14 + kh_shift))) >> (15 + kh_shift);
+            int64_t tmp_kv_s = (ov_s == 0) ? 32768 :
+                (((int64_t)div_lookup_ptr[kv_msb + 32768] * tv_s) * kv_sign +
+                 (1 << (14 + kv_shift))) >> (15 + kv_shift);
+            int64_t tmp_kd_s = (od_s == 0) ? 32768 :
+                (((int64_t)div_lookup_ptr[kd_msb + 32768] * td_s) * kd_sign +
+                 (1 << (14 + kd_shift))) >> (15 + kd_shift);
+
+            int64_t kh_s = tmp_kh_s < 0 ? 0 : (tmp_kh_s > 32768 ? 32768 : tmp_kh_s);
+            int64_t kv_s = tmp_kv_s < 0 ? 0 : (tmp_kv_s > 32768 ? 32768 : tmp_kv_s);
+            int64_t kd_s = tmp_kd_s < 0 ? 0 : (tmp_kd_s > 32768 ? 32768 : tmp_kd_s);
+
+            rst_h_s = ((kh_s * oh_s) + 16384) >> 15;
+            rst_v_s = ((kv_s * ov_s) + 16384) >> 15;
+            rst_d_s = ((kd_s * od_s) + 16384) >> 15;
+
+            const float rst_h_f = ((float)kh_s / 32768) * ((float)oh_s / 64);
+            const float rst_v_f = ((float)kv_s / 32768) * ((float)ov_s / 64);
+            const float rst_d_f = ((float)kd_s / 32768) * ((float)od_s / 64);
+
+            if (angle_flag && (rst_h_f > 0.))
+                rst_h_s = MIN((rst_h_s * adm_enhn_gain_limit), th_s);
+            if (angle_flag && (rst_h_f < 0.))
+                rst_h_s = MAX((rst_h_s * adm_enhn_gain_limit), th_s);
+
+            if (angle_flag && (rst_v_f > 0.))
+                rst_v_s = MIN(rst_v_s * adm_enhn_gain_limit, tv_s);
+            if (angle_flag && (rst_v_f < 0.))
+                rst_v_s = MAX(rst_v_s * adm_enhn_gain_limit, tv_s);
+
+            if (angle_flag && (rst_d_f > 0.))
+                rst_d_s = MIN(rst_d_s * adm_enhn_gain_limit, td_s);
+            if (angle_flag && (rst_d_f < 0.))
+                rst_d_s = MAX(rst_d_s * adm_enhn_gain_limit, td_s);
+
+            r->band_h[idx] = rst_h_s;
+            r->band_v[idx] = rst_v_s;
+            r->band_d[idx] = rst_d_s;
+
+            a->band_h[idx] = th_s - rst_h_s;
+            a->band_v[idx] = tv_s - rst_v_s;
+            a->band_d[idx] = td_s - rst_d_s;
+        }
+    }
+}
+
+/* ================================================================
  * Scalar threshold helper for adm_cm boundary pixels (int16 path).
  * Computes the 3x3 neighborhood sum across 3 orientations.
  * For interior pixels (1<=i<=h-2, 1<=j<=w-2).
@@ -2195,4 +2918,436 @@ float i4_adm_cm_avx2(AdmBuffer *buf, int w, int h, int src_stride,
     float num_scale_d = powf(f_accum_d, 1.0f / 3.0f) + powf_add;
 
     return (num_scale_h + num_scale_v + num_scale_d);
+}
+
+void i4_adm_csf_avx2(AdmBuffer *RESTRICT buf, int scale, int w, int h,
+                      int stride, const float csf_factors[4][2])
+{
+    const i4_adm_dwt_band_t *src = &buf->i4_decouple_a;
+    const i4_adm_dwt_band_t *dst = &buf->i4_csf_a;
+    const i4_adm_dwt_band_t *flt = &buf->i4_csf_f;
+
+    const int32_t *src_angles[3] = { src->band_h, src->band_v, src->band_d };
+    int32_t *dst_angles[3] = { dst->band_h, dst->band_v, dst->band_d };
+    int32_t *flt_angles[3] = { flt->band_h, flt->band_v, flt->band_d };
+
+    const float factor1 = csf_factors[scale][0];
+    const float factor2 = csf_factors[scale][1];
+    const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
+
+    const double pow2_32 = pow(2, 32);
+    const uint32_t i_rfactor[3] = { (uint32_t)(rfactor1[0] * pow2_32),
+                                    (uint32_t)(rfactor1[1] * pow2_32),
+                                    (uint32_t)(rfactor1[2] * pow2_32) };
+
+    const uint32_t FIX_ONE_BY_30 = 143165577;
+    /* shift_dst is always 28, shift_flt is always 32 for all indices */
+    const int32_t add_bef_shift_dst = (1u << 27); /* 1 << (28-1) */
+    const int64_t add_bef_shift_flt = (1LL << 31);
+
+    int left = w * ADM_BORDER_FACTOR - 0.5 - 1;
+    int top = h * ADM_BORDER_FACTOR - 0.5 - 1;
+    int right = w - left + 2;
+    int bottom = h - top + 2;
+
+    if (left < 0)   left = 0;
+    if (right > w)   right = w;
+    if (top < 0)     top = 0;
+    if (bottom > h)  bottom = h;
+
+    for (int theta = 0; theta < 3; ++theta)
+    {
+        const int32_t *src_ptr = src_angles[theta];
+        int32_t *dst_ptr = dst_angles[theta];
+        int32_t *flt_ptr = flt_angles[theta];
+
+        const __m256i v_rf = _mm256_set1_epi32((int32_t)i_rfactor[theta]);
+        const __m256i v_add_dst64 = _mm256_set1_epi64x((int64_t)add_bef_shift_dst);
+        const __m256i v_fix30 = _mm256_set1_epi32((int32_t)FIX_ONE_BY_30);
+        const __m256i v_add_flt64 = _mm256_set1_epi64x(add_bef_shift_flt);
+
+        for (int i = top; i < bottom; ++i)
+        {
+            const int offset = i * stride;
+            int j = left;
+
+            /* AVX2 loop: process 8 int32 values per iteration.
+             * We need uint32 * int32 -> int64 for the rfactor multiply.
+             * Since i_rfactor may exceed INT32_MAX, we use unsigned multiply
+             * on abs(src) and then conditionally negate. */
+            for (; j + 7 < right; j += 8)
+            {
+                __m256i sv = _mm256_loadu_si256(
+                    (const __m256i *)(src_ptr + offset + j));
+
+                /* Compute absolute value and sign for conditional negation */
+                __m256i abs_sv = _mm256_abs_epi32(sv);
+                /* sign_mask: 0xFFFFFFFF for negative, 0x00000000 for non-negative */
+                __m256i sign32 = _mm256_srai_epi32(sv, 31);
+
+                /* Group A: elements 0,2,4,6 - unsigned multiply */
+                __m256i mag_a = _mm256_mul_epu32(v_rf, abs_sv);
+
+                /* Group B: elements 1,3,5,7 */
+                __m256i abs_odd = _mm256_srli_epi64(abs_sv, 32);
+                __m256i mag_b = _mm256_mul_epu32(v_rf, abs_odd);
+
+                /* Expand sign to 64-bit lanes for conditional negation.
+                 * sign32 has {s0,s1,s2,s3,s4,s5,s6,s7} where each is 0 or -1.
+                 * For even elements (0,2,4,6): duplicate each into 64-bit lane
+                 * using shuffle 0xA0 = {0,0,2,2} within each 128-bit half.
+                 * For odd elements (1,3,5,7): use shuffle 0xF5 = {1,1,3,3}. */
+                __m256i sign64_a = _mm256_shuffle_epi32(sign32, 0xA0);
+                __m256i sign64_b = _mm256_shuffle_epi32(sign32, 0xF5);
+
+                /* Conditional negate: (mag ^ sign) - sign */
+                __m256i prod_a = _mm256_sub_epi64(
+                    _mm256_xor_si256(mag_a, sign64_a), sign64_a);
+                __m256i prod_b = _mm256_sub_epi64(
+                    _mm256_xor_si256(mag_b, sign64_b), sign64_b);
+
+                /* Add rounding constant */
+                prod_a = _mm256_add_epi64(prod_a, v_add_dst64);
+                prod_b = _mm256_add_epi64(prod_b, v_add_dst64);
+
+                /* Arithmetic right shift by 28 (no native epi64 srai in AVX2) */
+                __m256i srl_a = _mm256_srli_epi64(prod_a, 28);
+                __m256i sa = _mm256_shuffle_epi32(
+                    _mm256_srai_epi32(prod_a, 31), 0xF5);
+                prod_a = _mm256_or_si256(srl_a,
+                    _mm256_slli_epi64(sa, 36));
+
+                __m256i srl_b = _mm256_srli_epi64(prod_b, 28);
+                __m256i sb = _mm256_shuffle_epi32(
+                    _mm256_srai_epi32(prod_b, 31), 0xF5);
+                prod_b = _mm256_or_si256(srl_b,
+                    _mm256_slli_epi64(sb, 36));
+
+                /* Interleave even/odd results back into 8x int32 */
+                __m256i b_shifted = _mm256_slli_epi64(prod_b, 32);
+                __m256i dst_val = _mm256_blend_epi32(prod_a, b_shifted, 0xAA);
+
+                _mm256_storeu_si256((__m256i *)(dst_ptr + offset + j), dst_val);
+
+                /* Compute flt = (FIX_ONE_BY_30 * abs(dst_val) + 2^31) >> 32 */
+                __m256i abs_dst = _mm256_abs_epi32(dst_val);
+
+                __m256i flt_a = _mm256_mul_epu32(v_fix30, abs_dst);
+                __m256i abs_dst_odd = _mm256_srli_epi64(abs_dst, 32);
+                __m256i flt_b = _mm256_mul_epu32(v_fix30, abs_dst_odd);
+
+                flt_a = _mm256_add_epi64(flt_a, v_add_flt64);
+                flt_b = _mm256_add_epi64(flt_b, v_add_flt64);
+                flt_a = _mm256_srli_epi64(flt_a, 32);
+                flt_b = _mm256_srli_epi64(flt_b, 32);
+
+                __m256i fb_shifted = _mm256_slli_epi64(flt_b, 32);
+                __m256i flt_val = _mm256_blend_epi32(flt_a, fb_shifted, 0xAA);
+
+                _mm256_storeu_si256((__m256i *)(flt_ptr + offset + j), flt_val);
+            }
+
+            /* Scalar tail */
+            for (; j < right; ++j)
+            {
+                int32_t dst_val = (int32_t)(((i_rfactor[theta] * (int64_t)src_ptr[offset + j]) +
+                    add_bef_shift_dst) >> 28);
+                dst_ptr[offset + j] = dst_val;
+                flt_ptr[offset + j] = (int32_t)((((int64_t)FIX_ONE_BY_30 * abs(dst_val)) +
+                    add_bef_shift_flt) >> 32);
+            }
+        }
+    }
+}
+
+float adm_csf_den_s123_avx2(const i4_adm_dwt_band_t *RESTRICT src, int scale,
+                             int w, int h, int src_stride,
+                             const float csf_factors[4][2])
+{
+    float factor1 = csf_factors[scale][0];
+    float factor2 = csf_factors[scale][1];
+    const float rfactor[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
+
+    uint64_t accum_h = 0, accum_v = 0, accum_d = 0;
+    const uint32_t shift_sq[3] = { 31, 30, 31 };
+    const uint32_t accum_convert_float[3] = { 32, 27, 23 };
+    const uint32_t add_shift_sq[3] =
+        { 1u << shift_sq[0], 1u << shift_sq[1], 1u << shift_sq[2] };
+
+    const int left = w * ADM_BORDER_FACTOR - 0.5;
+    const int top = h * ADM_BORDER_FACTOR - 0.5;
+    const int right = w - left;
+    const int bottom = h - top;
+
+    uint32_t shift_cub = (uint32_t)ceil(log2(right - left));
+    uint32_t add_shift_cub = (uint32_t)pow(2, (shift_cub - 1));
+    uint32_t shift_accum = (uint32_t)ceil(log2(bottom - top));
+    uint32_t add_shift_accum = (uint32_t)pow(2, (shift_accum - 1));
+
+    const int scale_idx = scale - 1;
+    const uint32_t sq_shift = shift_sq[scale_idx];
+    const uint64_t sq_add = add_shift_sq[scale_idx];
+
+    int32_t *src_h_ptr = src->band_h + top * src_stride;
+    int32_t *src_v_ptr = src->band_v + top * src_stride;
+    int32_t *src_d_ptr = src->band_d + top * src_stride;
+
+    const __m256i v_sq_add = _mm256_set1_epi64x((int64_t)sq_add);
+    const __m256i v_cub_add = _mm256_set1_epi64x((int64_t)add_shift_cub);
+
+    for (int i = top; i < bottom; ++i)
+    {
+        uint64_t accum_inner_h = 0;
+        uint64_t accum_inner_v = 0;
+        uint64_t accum_inner_d = 0;
+        int j = left;
+
+        /* AVX2: process 4 int32 elements at a time using 32x32->64 multiply */
+        for (; j + 3 < right; j += 4)
+        {
+            /* band_h */
+            {
+                __m256i raw = _mm256_loadu_si256((const __m256i *)(src_h_ptr + j));
+                __m256i absv = _mm256_abs_epi32(raw);
+                __m128i abs128 = _mm256_castsi256_si128(absv);
+                __m256i abs64 = _mm256_cvtepu32_epi64(abs128);
+                __m256i sq = _mm256_mul_epu32(abs64, abs64);
+                sq = _mm256_add_epi64(sq, v_sq_add);
+                sq = _mm256_srli_epi64(sq, sq_shift);
+                __m256i cube = _mm256_mul_epu32(sq, abs64);
+                cube = _mm256_add_epi64(cube, v_cub_add);
+                cube = _mm256_srli_epi64(cube, shift_cub);
+                __m128i lo = _mm256_castsi256_si128(cube);
+                __m128i hi = _mm256_extracti128_si256(cube, 1);
+                __m128i sum128 = _mm_add_epi64(lo, hi);
+                __m128i sum_hi = _mm_unpackhi_epi64(sum128, sum128);
+                accum_inner_h += (uint64_t)_mm_cvtsi128_si64(
+                    _mm_add_epi64(sum128, sum_hi));
+            }
+            /* band_v */
+            {
+                __m256i raw = _mm256_loadu_si256((const __m256i *)(src_v_ptr + j));
+                __m256i absv = _mm256_abs_epi32(raw);
+                __m128i abs128 = _mm256_castsi256_si128(absv);
+                __m256i abs64 = _mm256_cvtepu32_epi64(abs128);
+                __m256i sq = _mm256_mul_epu32(abs64, abs64);
+                sq = _mm256_add_epi64(sq, v_sq_add);
+                sq = _mm256_srli_epi64(sq, sq_shift);
+                __m256i cube = _mm256_mul_epu32(sq, abs64);
+                cube = _mm256_add_epi64(cube, v_cub_add);
+                cube = _mm256_srli_epi64(cube, shift_cub);
+                __m128i lo = _mm256_castsi256_si128(cube);
+                __m128i hi = _mm256_extracti128_si256(cube, 1);
+                __m128i sum128 = _mm_add_epi64(lo, hi);
+                __m128i sum_hi = _mm_unpackhi_epi64(sum128, sum128);
+                accum_inner_v += (uint64_t)_mm_cvtsi128_si64(
+                    _mm_add_epi64(sum128, sum_hi));
+            }
+            /* band_d */
+            {
+                __m256i raw = _mm256_loadu_si256((const __m256i *)(src_d_ptr + j));
+                __m256i absv = _mm256_abs_epi32(raw);
+                __m128i abs128 = _mm256_castsi256_si128(absv);
+                __m256i abs64 = _mm256_cvtepu32_epi64(abs128);
+                __m256i sq = _mm256_mul_epu32(abs64, abs64);
+                sq = _mm256_add_epi64(sq, v_sq_add);
+                sq = _mm256_srli_epi64(sq, sq_shift);
+                __m256i cube = _mm256_mul_epu32(sq, abs64);
+                cube = _mm256_add_epi64(cube, v_cub_add);
+                cube = _mm256_srli_epi64(cube, shift_cub);
+                __m128i lo = _mm256_castsi256_si128(cube);
+                __m128i hi = _mm256_extracti128_si256(cube, 1);
+                __m128i sum128 = _mm_add_epi64(lo, hi);
+                __m128i sum_hi = _mm_unpackhi_epi64(sum128, sum128);
+                accum_inner_d += (uint64_t)_mm_cvtsi128_si64(
+                    _mm_add_epi64(sum128, sum_hi));
+            }
+        }
+
+        /* Scalar tail */
+        for (; j < right; ++j)
+        {
+            uint32_t hv = (uint32_t)abs(src_h_ptr[j]);
+            uint32_t vv = (uint32_t)abs(src_v_ptr[j]);
+            uint32_t dv = (uint32_t)abs(src_d_ptr[j]);
+            uint64_t val;
+            val = ((((((uint64_t)hv * hv) + sq_add) >> sq_shift) * hv)
+                + add_shift_cub) >> shift_cub;
+            accum_inner_h += val;
+            val = ((((((uint64_t)vv * vv) + sq_add) >> sq_shift) * vv)
+                + add_shift_cub) >> shift_cub;
+            accum_inner_v += val;
+            val = ((((((uint64_t)dv * dv) + sq_add) >> sq_shift) * dv)
+                + add_shift_cub) >> shift_cub;
+            accum_inner_d += val;
+        }
+
+        accum_h += (accum_inner_h + add_shift_accum) >> shift_accum;
+        accum_v += (accum_inner_v + add_shift_accum) >> shift_accum;
+        accum_d += (accum_inner_d + add_shift_accum) >> shift_accum;
+
+        src_h_ptr += src_stride;
+        src_v_ptr += src_stride;
+        src_d_ptr += src_stride;
+    }
+
+    double shift_csf = pow(2, (accum_convert_float[scale_idx] - shift_accum - shift_cub));
+    double csf_h = (double)(accum_h / shift_csf) * pow(rfactor[0], 3);
+    double csf_v = (double)(accum_v / shift_csf) * pow(rfactor[1], 3);
+    double csf_d = (double)(accum_d / shift_csf) * pow(rfactor[2], 3);
+
+    float powf_add = powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
+    float den_scale_h = powf(csf_h, 1.0f / 3.0f) + powf_add;
+    float den_scale_v = powf(csf_v, 1.0f / 3.0f) + powf_add;
+    float den_scale_d = powf(csf_d, 1.0f / 3.0f) + powf_add;
+
+    return (den_scale_h + den_scale_v + den_scale_d);
+}
+
+float adm_csf_den_scale_avx2(const adm_dwt_band_t *RESTRICT src, int w, int h,
+                              int src_stride, const float csf_factors[4][2])
+{
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
+    const float rfactor[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
+
+    uint64_t accum_h = 0, accum_v = 0, accum_d = 0;
+
+    const int left = w * ADM_BORDER_FACTOR - 0.5;
+    const int top = h * ADM_BORDER_FACTOR - 0.5;
+    const int right = w - left;
+    const int bottom = h - top;
+
+    int32_t shift_accum = (int32_t)ceil(log2((bottom - top)*(right - left)) - 20);
+    shift_accum = shift_accum > 0 ? shift_accum : 0;
+    int32_t add_shift_accum =
+        shift_accum > 0 ? (1 << (shift_accum - 1)) : 0;
+
+    int16_t *src_hb = src->band_h + top * src_stride;
+    int16_t *src_vb = src->band_v + top * src_stride;
+    int16_t *src_db = src->band_d + top * src_stride;
+
+    for (int i = top; i < bottom; ++i) {
+        uint64_t accum_inner_h = 0;
+        uint64_t accum_inner_v = 0;
+        uint64_t accum_inner_d = 0;
+        int j = left;
+
+        /* AVX2: process 16 int16 elements at a time.
+         * abs(x)^3 where abs(x) is uint16 (max 32768).
+         * Square via 32-bit multiply, then cube via 32x32->64. */
+        for (; j + 15 < right; j += 16)
+        {
+            __m256i h_raw = _mm256_loadu_si256((const __m256i *)(src_hb + j));
+            __m256i v_raw = _mm256_loadu_si256((const __m256i *)(src_vb + j));
+            __m256i d_raw = _mm256_loadu_si256((const __m256i *)(src_db + j));
+
+            __m256i h_abs = _mm256_abs_epi16(h_raw);
+            __m256i v_abs = _mm256_abs_epi16(v_raw);
+            __m256i d_abs = _mm256_abs_epi16(d_raw);
+
+            __m256i zero = _mm256_setzero_si256();
+            __m256i h_lo16 = _mm256_unpacklo_epi16(h_abs, zero);
+            __m256i h_hi16 = _mm256_unpackhi_epi16(h_abs, zero);
+            __m256i h_sq_lo = _mm256_mullo_epi32(h_lo16, h_lo16);
+            __m256i h_sq_hi = _mm256_mullo_epi32(h_hi16, h_hi16);
+
+            /* band_h cube via even/odd 32x32->64 */
+            {
+                __m256i cube_a = _mm256_mul_epu32(h_sq_lo, h_lo16);
+                __m256i cube_b = _mm256_mul_epu32(
+                    _mm256_srli_epi64(h_sq_lo, 32),
+                    _mm256_srli_epi64(h_lo16, 32));
+                __m256i sum_ab = _mm256_add_epi64(cube_a, cube_b);
+                __m256i cube_c = _mm256_mul_epu32(h_sq_hi, h_hi16);
+                __m256i cube_d = _mm256_mul_epu32(
+                    _mm256_srli_epi64(h_sq_hi, 32),
+                    _mm256_srli_epi64(h_hi16, 32));
+                __m256i sum_cd = _mm256_add_epi64(cube_c, cube_d);
+                __m256i total = _mm256_add_epi64(sum_ab, sum_cd);
+                __m128i lo128 = _mm256_castsi256_si128(total);
+                __m128i hi128 = _mm256_extracti128_si256(total, 1);
+                __m128i s128 = _mm_add_epi64(lo128, hi128);
+                accum_inner_h += (uint64_t)_mm_cvtsi128_si64(s128) +
+                    (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(s128, s128));
+            }
+
+            /* band_v */
+            {
+                __m256i v_lo16 = _mm256_unpacklo_epi16(v_abs, zero);
+                __m256i v_hi16 = _mm256_unpackhi_epi16(v_abs, zero);
+                __m256i v_sq_lo = _mm256_mullo_epi32(v_lo16, v_lo16);
+                __m256i v_sq_hi = _mm256_mullo_epi32(v_hi16, v_hi16);
+                __m256i cube_a = _mm256_mul_epu32(v_sq_lo, v_lo16);
+                __m256i cube_b = _mm256_mul_epu32(
+                    _mm256_srli_epi64(v_sq_lo, 32),
+                    _mm256_srli_epi64(v_lo16, 32));
+                __m256i sum_ab = _mm256_add_epi64(cube_a, cube_b);
+                __m256i cube_c = _mm256_mul_epu32(v_sq_hi, v_hi16);
+                __m256i cube_d = _mm256_mul_epu32(
+                    _mm256_srli_epi64(v_sq_hi, 32),
+                    _mm256_srli_epi64(v_hi16, 32));
+                __m256i sum_cd = _mm256_add_epi64(cube_c, cube_d);
+                __m256i total = _mm256_add_epi64(sum_ab, sum_cd);
+                __m128i lo128 = _mm256_castsi256_si128(total);
+                __m128i hi128 = _mm256_extracti128_si256(total, 1);
+                __m128i s128 = _mm_add_epi64(lo128, hi128);
+                accum_inner_v += (uint64_t)_mm_cvtsi128_si64(s128) +
+                    (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(s128, s128));
+            }
+
+            /* band_d */
+            {
+                __m256i d_lo16 = _mm256_unpacklo_epi16(d_abs, zero);
+                __m256i d_hi16 = _mm256_unpackhi_epi16(d_abs, zero);
+                __m256i d_sq_lo = _mm256_mullo_epi32(d_lo16, d_lo16);
+                __m256i d_sq_hi = _mm256_mullo_epi32(d_hi16, d_hi16);
+                __m256i cube_a = _mm256_mul_epu32(d_sq_lo, d_lo16);
+                __m256i cube_b = _mm256_mul_epu32(
+                    _mm256_srli_epi64(d_sq_lo, 32),
+                    _mm256_srli_epi64(d_lo16, 32));
+                __m256i sum_ab = _mm256_add_epi64(cube_a, cube_b);
+                __m256i cube_c = _mm256_mul_epu32(d_sq_hi, d_hi16);
+                __m256i cube_d = _mm256_mul_epu32(
+                    _mm256_srli_epi64(d_sq_hi, 32),
+                    _mm256_srli_epi64(d_hi16, 32));
+                __m256i sum_cd = _mm256_add_epi64(cube_c, cube_d);
+                __m256i total = _mm256_add_epi64(sum_ab, sum_cd);
+                __m128i lo128 = _mm256_castsi256_si128(total);
+                __m128i hi128 = _mm256_extracti128_si256(total, 1);
+                __m128i s128 = _mm_add_epi64(lo128, hi128);
+                accum_inner_d += (uint64_t)_mm_cvtsi128_si64(s128) +
+                    (uint64_t)_mm_cvtsi128_si64(_mm_unpackhi_epi64(s128, s128));
+            }
+        }
+
+        /* Scalar tail */
+        for (; j < right; ++j) {
+            uint16_t hv = (uint16_t)abs(src_hb[j]);
+            uint16_t vv = (uint16_t)abs(src_vb[j]);
+            uint16_t dv = (uint16_t)abs(src_db[j]);
+            accum_inner_h += ((uint64_t)hv * hv) * hv;
+            accum_inner_v += ((uint64_t)vv * vv) * vv;
+            accum_inner_d += ((uint64_t)dv * dv) * dv;
+        }
+
+        accum_h += (accum_inner_h + add_shift_accum) >> shift_accum;
+        accum_v += (accum_inner_v + add_shift_accum) >> shift_accum;
+        accum_d += (accum_inner_d + add_shift_accum) >> shift_accum;
+        src_hb += src_stride;
+        src_vb += src_stride;
+        src_db += src_stride;
+    }
+
+    double shift_csf = pow(2, (18 - shift_accum));
+    double csf_h = (double)(accum_h / shift_csf) * pow(rfactor[0], 3);
+    double csf_v = (double)(accum_v / shift_csf) * pow(rfactor[1], 3);
+    double csf_d = (double)(accum_d / shift_csf) * pow(rfactor[2], 3);
+
+    float powf_add = powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
+    float den_scale_h = powf(csf_h, 1.0f / 3.0f) + powf_add;
+    float den_scale_v = powf(csf_v, 1.0f / 3.0f) + powf_add;
+    float den_scale_d = powf(csf_d, 1.0f / 3.0f) + powf_add;
+
+    return(den_scale_h + den_scale_v + den_scale_d);
 }
