@@ -1517,8 +1517,10 @@ char *run_tests(void)
     mu_run_test(test_identity_float_b_v0_6_3);
 #endif
 
-    /* 3.3.4: Model collection round-trip */
+    /* 3.3.4: Model collection round-trip (uses float model vmaf_rb_v0.6.2) */
+#if VMAF_FLOAT_FEATURES
     mu_run_test(test_collection_roundtrip_rb_v0_6_2);
+#endif
 
     /* 3.4: Version compatibility */
     mu_run_test(test_load_legacy_json_models);
