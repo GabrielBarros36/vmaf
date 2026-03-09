@@ -1641,62 +1641,49 @@ void adm_decouple_s123_avx2(AdmBuffer *buf, int w, int h, int stride,
              * The C code does: (float)ot_dp / 4096.0
              * We need to convert int64 -> float (matching C's cast), then -> double.
              *
-             * For int64 -> float: there's no single SSE/AVX2 instruction.
-             * We use scalar extraction to match the C cast exactly.
-             * This is the simplest way to guarantee bit-exact results.
+             * SIMD int64→double via magic number trick: for signed int64 in
+             * [-2^51, 2^51), add 3×2^51 as int64, reinterpret as double,
+             * subtract 3×2^51 as double. This gives an exact conversion.
+             * Then double→float via _mm_cvtpd_ps matches C's (float) cast rounding.
+             * Then float→double via _mm256_cvtps_pd matches C's implicit promotion.
+             *
+             * Values here are products of ~14-bit DWT coefficients: max ~2^30,
+             * well within the 2^51 safe range.
              */
-            int64_t dp_arr[8], omag_arr[8], tmag_arr[8];
+            __m128i magic_i = _mm_set1_epi64x(0x4338000000000000LL);
+            __m128d magic_d = _mm_set1_pd(6755399441055744.0); /* 3 * 2^51 */
 
-            /* Extract dp values: dp_02_lo has [elem0, elem2], dp_13_lo has [elem1, elem3] */
-            dp_arr[0] = _mm_extract_epi64(dp_02_lo, 0);
-            dp_arr[2] = _mm_extract_epi64(dp_02_lo, 1);
-            dp_arr[1] = _mm_extract_epi64(dp_13_lo, 0);
-            dp_arr[3] = _mm_extract_epi64(dp_13_lo, 1);
-            dp_arr[4] = _mm_extract_epi64(dp_02_hi, 0);
-            dp_arr[6] = _mm_extract_epi64(dp_02_hi, 1);
-            dp_arr[5] = _mm_extract_epi64(dp_13_hi, 0);
-            dp_arr[7] = _mm_extract_epi64(dp_13_hi, 1);
+            /* dp: int64 → double (exact) → float (rounded) → ordered __m128 */
+            __m128 dp_f_lo = _mm_unpacklo_ps(
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(dp_02_lo, magic_i)), magic_d)),
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(dp_13_lo, magic_i)), magic_d)));
+            __m128 dp_f_hi = _mm_unpacklo_ps(
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(dp_02_hi, magic_i)), magic_d)),
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(dp_13_hi, magic_i)), magic_d)));
 
-            omag_arr[0] = _mm_extract_epi64(omag_02_lo, 0);
-            omag_arr[2] = _mm_extract_epi64(omag_02_lo, 1);
-            omag_arr[1] = _mm_extract_epi64(omag_13_lo, 0);
-            omag_arr[3] = _mm_extract_epi64(omag_13_lo, 1);
-            omag_arr[4] = _mm_extract_epi64(omag_02_hi, 0);
-            omag_arr[6] = _mm_extract_epi64(omag_02_hi, 1);
-            omag_arr[5] = _mm_extract_epi64(omag_13_hi, 0);
-            omag_arr[7] = _mm_extract_epi64(omag_13_hi, 1);
+            /* omag: same conversion */
+            __m128 omag_f_lo = _mm_unpacklo_ps(
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(omag_02_lo, magic_i)), magic_d)),
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(omag_13_lo, magic_i)), magic_d)));
+            __m128 omag_f_hi = _mm_unpacklo_ps(
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(omag_02_hi, magic_i)), magic_d)),
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(omag_13_hi, magic_i)), magic_d)));
 
-            tmag_arr[0] = _mm_extract_epi64(tmag_02_lo, 0);
-            tmag_arr[2] = _mm_extract_epi64(tmag_02_lo, 1);
-            tmag_arr[1] = _mm_extract_epi64(tmag_13_lo, 0);
-            tmag_arr[3] = _mm_extract_epi64(tmag_13_lo, 1);
-            tmag_arr[4] = _mm_extract_epi64(tmag_02_hi, 0);
-            tmag_arr[6] = _mm_extract_epi64(tmag_02_hi, 1);
-            tmag_arr[5] = _mm_extract_epi64(tmag_13_hi, 0);
-            tmag_arr[7] = _mm_extract_epi64(tmag_13_hi, 1);
+            /* tmag: same conversion */
+            __m128 tmag_f_lo = _mm_unpacklo_ps(
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(tmag_02_lo, magic_i)), magic_d)),
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(tmag_13_lo, magic_i)), magic_d)));
+            __m128 tmag_f_hi = _mm_unpacklo_ps(
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(tmag_02_hi, magic_i)), magic_d)),
+                _mm_cvtpd_ps(_mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(tmag_13_hi, magic_i)), magic_d)));
 
-            /* Compute angle flags matching C exactly:
-             *   (float)dp / 4096.0 -> double promotion
-             *   comparison in double precision */
-            float dp_f[8], omag_f[8], tmag_f[8];
-            for (int e = 0; e < 8; ++e) {
-                dp_f[e]   = (float)dp_arr[e];
-                omag_f[e] = (float)omag_arr[e];
-                tmag_f[e] = (float)tmag_arr[e];
-            }
-
-            /* Load into SIMD for the double-precision comparison */
-            __m256 dp_ps   = _mm256_loadu_ps(dp_f);
-            __m256 omag_ps = _mm256_loadu_ps(omag_f);
-            __m256 tmag_ps = _mm256_loadu_ps(tmag_f);
-
-            /* Split to double (lo/hi 4 floats) */
-            __m256d dp_d_lo   = _mm256_cvtps_pd(_mm256_castps256_ps128(dp_ps));
-            __m256d dp_d_hi   = _mm256_cvtps_pd(_mm256_extractf128_ps(dp_ps, 1));
-            __m256d omag_d_lo = _mm256_cvtps_pd(_mm256_castps256_ps128(omag_ps));
-            __m256d omag_d_hi = _mm256_cvtps_pd(_mm256_extractf128_ps(omag_ps, 1));
-            __m256d tmag_d_lo = _mm256_cvtps_pd(_mm256_castps256_ps128(tmag_ps));
-            __m256d tmag_d_hi = _mm256_cvtps_pd(_mm256_extractf128_ps(tmag_ps, 1));
+            /* float → double (matching C's implicit promotion for /4096.0) */
+            __m256d dp_d_lo   = _mm256_cvtps_pd(dp_f_lo);
+            __m256d dp_d_hi   = _mm256_cvtps_pd(dp_f_hi);
+            __m256d omag_d_lo = _mm256_cvtps_pd(omag_f_lo);
+            __m256d omag_d_hi = _mm256_cvtps_pd(omag_f_hi);
+            __m256d tmag_d_lo = _mm256_cvtps_pd(tmag_f_lo);
+            __m256d tmag_d_hi = _mm256_cvtps_pd(tmag_f_hi);
 
             __m256d v_inv_4096_d = _mm256_set1_pd(1.0 / 4096.0);
             __m256d v_zero_d = _mm256_setzero_pd();
