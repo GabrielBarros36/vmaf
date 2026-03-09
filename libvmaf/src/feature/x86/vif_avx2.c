@@ -134,10 +134,11 @@ static FORCE_INLINE int32_t hsum_epi32(__m256i v) {
  * Vectorized threshold comparison and non-log accumulation for 8 elements.
  * Processes one __m256i chunk of xx, yy, xy:
  *   - Non-log path (sigma1_sq < sigma_nsq): accumulates sigma2_sq and count
- *   - Log path (sigma1_sq >= sigma_nsq): iterates only qualifying elements
+ *   - Log path (sigma1_sq >= sigma_nsq): batch FP division/multiplication
+ *     via AVX2 double-precision, then scalar log table lookups
  *
- * xx_v, yy_v, xy_v: 8x int32 packed sigma values
- * xx, yy, xy: stack arrays (already stored) for scalar extraction in log path
+ * xx_v, yy_v: 8x int32 packed sigma values
+ * xx, yy, xy: stack arrays (already stored) for extraction
  * base: starting index into xx/yy/xy arrays (0 or 8)
  */
 #define VIF_ACCUM_BLOCK(xx_v, yy_v, xx, yy, xy, base, \
@@ -145,33 +146,55 @@ static FORCE_INLINE int32_t hsum_epi32(__m256i v) {
                         accum_num_log, accum_den_log, \
                         accum_num_non_log, accum_den_non_log) \
 do { \
-    /* mask: all-ones where sigma1_sq >= sigma_nsq (signed compare) */ \
-    /* cmpgt gives > so compare against (sigma_nsq - 1) to get >= */ \
     __m256i mask_ = _mm256_cmpgt_epi32(xx_v, _mm256_set1_epi32((sigma_nsq) - 1)); \
-    /* Non-log path: accumulate sigma2_sq where mask is 0 (below threshold) */ \
     __m256i non_log_yy_ = _mm256_andnot_si256(mask_, yy_v); \
     accum_num_non_log += hsum_epi32(non_log_yy_); \
-    /* Count non-log elements: count zero bits in mask (4 bytes per element) */ \
     int log_mask_ps_ = _mm256_movemask_ps(_mm256_castsi256_ps(mask_)); \
     accum_den_non_log += 8 - __builtin_popcount(log_mask_ps_); \
-    /* Log path: iterate only qualifying elements via bit scan */ \
-    unsigned int log_bits_ = (unsigned int)log_mask_ps_; \
-    while (log_bits_) { \
-        int b_ = __builtin_ctz(log_bits_); \
-        log_bits_ &= log_bits_ - 1; \
-        int32_t sigma1_sq_ = (int32_t)(xx)[(base) + b_]; \
-        int32_t sigma2_sq_ = (int32_t)(yy)[(base) + b_]; \
-        int32_t sigma12_ = (int32_t)(xy)[(base) + b_]; \
-        accum_den_log += log2_32(log2_table, sigma_nsq + sigma1_sq_) - 2048 * 17; \
-        if (sigma12_ > 0 && sigma2_sq_ > 0) { \
-            const double eps_ = 65536 * 1.0e-10; \
-            double g_ = sigma12_ / (sigma1_sq_ + eps_); \
-            int32_t sv_sq_ = sigma2_sq_ - g_ * sigma12_; \
-            sv_sq_ = (uint32_t)(MAX(sv_sq_, 0)); \
-            g_ = MIN(g_, vif_enhn_gain_limit); \
-            uint32_t numer1_ = (sv_sq_ + sigma_nsq); \
-            int64_t numer1_tmp_ = (int64_t)((g_ * g_ * sigma1_sq_)) + numer1_; \
-            accum_num_log += log2_64(log2_table, numer1_tmp_) - log2_64(log2_table, numer1_); \
+    if (log_mask_ps_) { \
+        /* Batch FP division and multiplication for all 8 elements. */ \
+        /* Elements not on the log path compute harmlessly; results unused. */ \
+        __m256d xx_d0_ = _mm256_cvtepi32_pd(_mm_loadu_si128((__m128i*)&(xx)[(base)])); \
+        __m256d xx_d1_ = _mm256_cvtepi32_pd(_mm_loadu_si128((__m128i*)&(xx)[(base)+4])); \
+        __m256d yy_d0_ = _mm256_cvtepi32_pd(_mm_loadu_si128((__m128i*)&(yy)[(base)])); \
+        __m256d yy_d1_ = _mm256_cvtepi32_pd(_mm_loadu_si128((__m128i*)&(yy)[(base)+4])); \
+        __m256d xy_d0_ = _mm256_cvtepi32_pd(_mm_loadu_si128((__m128i*)&(xy)[(base)])); \
+        __m256d xy_d1_ = _mm256_cvtepi32_pd(_mm_loadu_si128((__m128i*)&(xy)[(base)+4])); \
+        __m256d eps_v_ = _mm256_set1_pd(65536.0 * 1.0e-10); \
+        __m256d limit_v_ = _mm256_set1_pd(vif_enhn_gain_limit); \
+        /* g = sigma12 / (sigma1_sq + eps) — 2 vector divides for 8 elements */ \
+        __m256d g0_ = _mm256_div_pd(xy_d0_, _mm256_add_pd(xx_d0_, eps_v_)); \
+        __m256d g1_ = _mm256_div_pd(xy_d1_, _mm256_add_pd(xx_d1_, eps_v_)); \
+        /* sv_sq = sigma2_sq - g * sigma12 (unclamped g) */ \
+        __m256d sv0_ = _mm256_sub_pd(yy_d0_, _mm256_mul_pd(g0_, xy_d0_)); \
+        __m256d sv1_ = _mm256_sub_pd(yy_d1_, _mm256_mul_pd(g1_, xy_d1_)); \
+        /* g = min(g, limit) — clamp after sv_sq computation */ \
+        g0_ = _mm256_min_pd(g0_, limit_v_); \
+        g1_ = _mm256_min_pd(g1_, limit_v_); \
+        /* g*g*sigma1_sq (clamped g) */ \
+        __m256d gg_xx0_ = _mm256_mul_pd(_mm256_mul_pd(g0_, g0_), xx_d0_); \
+        __m256d gg_xx1_ = _mm256_mul_pd(_mm256_mul_pd(g1_, g1_), xx_d1_); \
+        ALIGNED(32) double sv_arr_[8], gg_xx_arr_[8]; \
+        _mm256_store_pd(&sv_arr_[0], sv0_); \
+        _mm256_store_pd(&sv_arr_[4], sv1_); \
+        _mm256_store_pd(&gg_xx_arr_[0], gg_xx0_); \
+        _mm256_store_pd(&gg_xx_arr_[4], gg_xx1_); \
+        /* Scalar loop: log table lookups (not vectorizable without gather) */ \
+        unsigned int log_bits_ = (unsigned int)log_mask_ps_; \
+        while (log_bits_) { \
+            int b_ = __builtin_ctz(log_bits_); \
+            log_bits_ &= log_bits_ - 1; \
+            int32_t sigma1_sq_ = (int32_t)(xx)[(base) + b_]; \
+            int32_t sigma2_sq_ = (int32_t)(yy)[(base) + b_]; \
+            int32_t sigma12_ = (int32_t)(xy)[(base) + b_]; \
+            accum_den_log += log2_32(log2_table, sigma_nsq + sigma1_sq_) - 2048 * 17; \
+            if (sigma12_ > 0 && sigma2_sq_ > 0) { \
+                int32_t sv_sq_ = (int32_t)sv_arr_[b_]; \
+                sv_sq_ = (uint32_t)(MAX(sv_sq_, 0)); \
+                uint32_t numer1_ = (sv_sq_ + sigma_nsq); \
+                int64_t numer1_tmp_ = (int64_t)(gg_xx_arr_[b_]) + numer1_; \
+                accum_num_log += log2_64(log2_table, numer1_tmp_) - log2_64(log2_table, numer1_); \
+            } \
         } \
     } \
 } while (0)
