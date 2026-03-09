@@ -19,6 +19,7 @@
 #include "bench_simd_perf.h"
 #include "test_simd_common.h"
 #include "config.h"
+#include "cpu.h"
 
 /* Feature module headers */
 #include "feature/integer_adm.h"
@@ -1094,6 +1095,12 @@ int main(int argc, char **argv) {
     BenchResult results[MAX_RESULTS];
     int n_results = 0;
 
+    vmaf_init_cpu();
+#if ARCH_X86 && HAVE_AVX512
+    unsigned cpu_flags = vmaf_get_cpu_flags();
+    bool have_avx512 = (cpu_flags & VMAF_X86_CPU_FLAG_AVX512) != 0;
+#endif
+
     fprintf(stderr, "SIMD Performance Benchmark — %dx%d, seed=42\n", BENCH_W, BENCH_H);
     fprintf(stderr, "Repetitions per benchmark: %d\n\n", num_reps);
 
@@ -1138,8 +1145,9 @@ int main(int argc, char **argv) {
         bench_run(&results[n_results++], bench_vif_subsample_rd_8_avx2, &sub8_ctx,
                   "vif_subsample_rd_8", "avx2", num_reps);
 #if HAVE_AVX512
-        bench_run(&results[n_results++], bench_vif_subsample_rd_8_avx512, &sub8_ctx,
-                  "vif_subsample_rd_8", "avx512", num_reps);
+        if (have_avx512)
+            bench_run(&results[n_results++], bench_vif_subsample_rd_8_avx512, &sub8_ctx,
+                      "vif_subsample_rd_8", "avx512", num_reps);
 #endif
 #endif
 #if ARCH_AARCH64
@@ -1166,8 +1174,9 @@ int main(int argc, char **argv) {
         bench_run(&results[n_results++], bench_vif_subsample_rd_16_avx2, &sub16_ctx,
                   "vif_subsample_rd_16", "avx2", num_reps);
 #if HAVE_AVX512
-        bench_run(&results[n_results++], bench_vif_subsample_rd_16_avx512, &sub16_ctx,
-                  "vif_subsample_rd_16", "avx512", num_reps);
+        if (have_avx512)
+            bench_run(&results[n_results++], bench_vif_subsample_rd_16_avx512, &sub16_ctx,
+                      "vif_subsample_rd_16", "avx512", num_reps);
 #endif
 #endif
 #if ARCH_AARCH64
@@ -1194,8 +1203,9 @@ int main(int argc, char **argv) {
         bench_run(&results[n_results++], bench_vif_statistic_8_avx2, &stat8_ctx,
                   "vif_statistic_8", "avx2", num_reps);
 #if HAVE_AVX512
-        bench_run(&results[n_results++], bench_vif_statistic_8_avx512, &stat8_ctx,
-                  "vif_statistic_8", "avx512", num_reps);
+        if (have_avx512)
+            bench_run(&results[n_results++], bench_vif_statistic_8_avx512, &stat8_ctx,
+                      "vif_statistic_8", "avx512", num_reps);
 #endif
 #endif
 #if ARCH_AARCH64
@@ -1222,8 +1232,9 @@ int main(int argc, char **argv) {
         bench_run(&results[n_results++], bench_vif_statistic_16_avx2, &stat16_ctx,
                   "vif_statistic_16", "avx2", num_reps);
 #if HAVE_AVX512
-        bench_run(&results[n_results++], bench_vif_statistic_16_avx512, &stat16_ctx,
-                  "vif_statistic_16", "avx512", num_reps);
+        if (have_avx512)
+            bench_run(&results[n_results++], bench_vif_statistic_16_avx512, &stat16_ctx,
+                      "vif_statistic_16", "avx512", num_reps);
 #endif
 #endif
 #if ARCH_AARCH64
@@ -1250,8 +1261,9 @@ int main(int argc, char **argv) {
         bench_run(&results[n_results++], bench_motion_x_conv_16_avx2, &motion_ctx,
                   "motion_x_convolution_16", "avx2", num_reps);
 #if HAVE_AVX512
-        bench_run(&results[n_results++], bench_motion_x_conv_16_avx512, &motion_ctx,
-                  "motion_x_convolution_16", "avx512", num_reps);
+        if (have_avx512)
+            bench_run(&results[n_results++], bench_motion_x_conv_16_avx512, &motion_ctx,
+                      "motion_x_convolution_16", "avx512", num_reps);
 #endif
 #endif
         /* Motion has no NEON variant */

@@ -14,6 +14,7 @@
 #include "test_simd_common.h"
 
 #include "config.h"
+#include "cpu.h"
 #include "feature/integer_motion.h"
 #include "feature/common/alignment.h"
 
@@ -191,10 +192,15 @@ static char *test_x_convolution_16_avx512(void) {
 /* ========== Test Runner ========== */
 
 char *run_tests(void) {
+    vmaf_init_cpu();
 #if ARCH_X86
     mu_run_test(test_x_convolution_16_avx2);
 #if HAVE_AVX512
-    mu_run_test(test_x_convolution_16_avx512);
+    if (vmaf_get_cpu_flags() & VMAF_X86_CPU_FLAG_AVX512) {
+        mu_run_test(test_x_convolution_16_avx512);
+    } else {
+        fprintf(stderr, "test_x_convolution_16_avx512: skipped (no AVX-512)\n");
+    }
 #endif
 #endif
     return NULL;

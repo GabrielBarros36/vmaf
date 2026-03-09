@@ -16,6 +16,7 @@
 #include "test_simd_common.h"
 
 #include "config.h"
+#include "cpu.h"
 #include "feature/integer_vif.h"
 #include "feature/common/alignment.h"
 
@@ -1014,16 +1015,21 @@ static char *test_vif_statistic_16_neon(void) {
 /* ========== Test Runner ========== */
 
 char *run_tests(void) {
+    vmaf_init_cpu();
 #if ARCH_X86
     mu_run_test(test_subsample_rd_8_avx2);
     mu_run_test(test_subsample_rd_16_avx2);
     mu_run_test(test_vif_statistic_8_avx2);
     mu_run_test(test_vif_statistic_16_avx2);
 #if HAVE_AVX512
-    mu_run_test(test_subsample_rd_8_avx512);
-    mu_run_test(test_subsample_rd_16_avx512);
-    mu_run_test(test_vif_statistic_8_avx512);
-    mu_run_test(test_vif_statistic_16_avx512);
+    if (vmaf_get_cpu_flags() & VMAF_X86_CPU_FLAG_AVX512) {
+        mu_run_test(test_subsample_rd_8_avx512);
+        mu_run_test(test_subsample_rd_16_avx512);
+        mu_run_test(test_vif_statistic_8_avx512);
+        mu_run_test(test_vif_statistic_16_avx512);
+    } else {
+        fprintf(stderr, "AVX-512 VIF tests: skipped (no AVX-512)\n");
+    }
 #endif
 #endif
 #if ARCH_AARCH64

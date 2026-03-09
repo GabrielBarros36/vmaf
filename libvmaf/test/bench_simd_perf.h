@@ -20,6 +20,10 @@
 #include <mach/mach_time.h>
 #endif
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 /* ========== High-Resolution Timer ========== */
 
 static inline uint64_t bench_now_ns(void) {
