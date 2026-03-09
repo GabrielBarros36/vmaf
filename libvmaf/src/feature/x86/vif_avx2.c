@@ -277,6 +277,23 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
 
     // loop on row, each iteration produces one line of output
     for (unsigned i = 0; i < h; ++i) {
+        // Precompute row pointers — hoisted from inner loops to eliminate
+        // scalar imul instructions for row offset calculation.
+        const uint8_t *ref_center = (const uint8_t *)buf.ref + buf.stride * i;
+        const uint8_t *dis_center = (const uint8_t *)buf.dis + buf.stride * i;
+        const uint8_t *ref_above[VIF_FILT_MAX / 2];
+        const uint8_t *ref_below[VIF_FILT_MAX / 2];
+        const uint8_t *dis_above[VIF_FILT_MAX / 2];
+        const uint8_t *dis_below[VIF_FILT_MAX / 2];
+        for (unsigned tap = 0; tap < fwidth / 2; tap++) {
+            int ii_above = i - fwidth / 2 + tap;
+            int ii_below = i + fwidth / 2 - tap;
+            ref_above[tap] = (const uint8_t *)buf.ref + buf.stride * ii_above;
+            ref_below[tap] = (const uint8_t *)buf.ref + buf.stride * ii_below;
+            dis_above[tap] = (const uint8_t *)buf.dis + buf.stride * ii_above;
+            dis_below[tap] = (const uint8_t *)buf.dis + buf.stride * ii_below;
+        }
+
         // Filter vertically
         // First consider all blocks of 16 elements until it's not possible anymore
         unsigned n = w >> 4;
@@ -288,8 +305,8 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
             __m256i accum_mu1_left, accum_mu1_right;
 
             __m256i f0 = vf_epi16[fwidth / 2];
-            __m256i r0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.ref) + (buf.stride * i) + jj)));
-            __m256i d0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.dis) + (buf.stride * i) + jj)));
+            __m256i r0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(ref_center + jj)));
+            __m256i d0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(dis_center + jj)));
 
             // filtered r,d
             multiply2(accum_mu1_left, accum_mu1_right, r0, f0);
@@ -301,15 +318,12 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
             multiply3(accum_ref_dis_left, accum_ref_dis_right, d0, r0, f0);
 
             for (unsigned int tap = 0; tap < fwidth / 2; tap++) {
-                int ii_check = i - fwidth / 2 + tap;
-                int ii_check_1 = i + fwidth / 2 - tap;
-
                 __m256i f16 = vf_epi16[tap];
                 __m256i f32 = vf_epi32[tap];
-                __m256i r0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.ref) + (buf.stride * ii_check) + jj)));
-                __m256i r1 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.ref) + (buf.stride * (ii_check_1)) + jj)));
-                __m256i d0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.dis) + (buf.stride * ii_check) + jj)));
-                __m256i d1 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(((uint8_t*)buf.dis) + (buf.stride * (ii_check_1)) + jj)));
+                __m256i r0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(ref_above[tap] + jj)));
+                __m256i r1 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(ref_below[tap] + jj)));
+                __m256i d0 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(dis_above[tap] + jj)));
+                __m256i d1 = _mm256_cvtepu8_epi16(_mm_loadu_si128((__m128i*)(dis_below[tap] + jj)));
 
                 // Interleave symmetric tap pairs for shared MADD operations
                 __m256i r_lo = _mm256_unpacklo_epi16(r0, r1);
@@ -698,9 +712,29 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
         // VERTICAL
         int ii = i - fwidth_half;
         unsigned n = w >> 4;
+
+        // Precompute row pointers for vertical filter — eliminates
+        // scalar imul for row offset computation in the inner loop.
+        uint16_t *ref_base = (uint16_t *)buf.ref;
+        uint16_t *dis_base = (uint16_t *)buf.dis;
+        uint16_t *ref_center_row = ref_base + i * stride;
+        uint16_t *dis_center_row = dis_base + i * stride;
+        uint16_t *ref_row_above[VIF_FILT_MAX / 2];
+        uint16_t *ref_row_below[VIF_FILT_MAX / 2];
+        uint16_t *dis_row_above[VIF_FILT_MAX / 2];
+        uint16_t *dis_row_below[VIF_FILT_MAX / 2];
+        for (unsigned tap = 0; tap < (unsigned)(fwidth / 2); ++tap) {
+            int ii_lo = i - fwidth / 2 + tap;
+            int ii_hi = i + fwidth / 2 - tap;
+            ref_row_above[tap] = ref_base + ii_lo * stride;
+            ref_row_below[tap] = ref_base + ii_hi * stride;
+            dis_row_above[tap] = dis_base + ii_lo * stride;
+            dis_row_below[tap] = dis_base + ii_hi * stride;
+        }
+
         for (unsigned j = 0; j < n << 4; j = j + 16) {
-            uint16_t *ref = buf.ref;
-            uint16_t *dis = buf.dis;
+            uint16_t *ref = ref_base;
+            uint16_t *dis = dis_base;
             __m256i accumr_lo, accumr_hi, accumd_lo, accumd_hi, rmul1, rmul2,
                 dmul1, dmul2, accumref1, accumref2, accumref3, accumref4,
                 accumrefdis1, accumrefdis2, accumrefdis3, accumrefdis4,
@@ -768,9 +802,9 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
             {
                 __m256i f1 = vf_epi16[fwidth / 2];
                 __m256i ref1 = _mm256_loadu_si256(
-                    (__m256i *)(ref + (i * stride) + j));
+                    (__m256i *)(ref_center_row + j));
                 __m256i dis1 = _mm256_loadu_si256(
-                    (__m256i *)(dis + (i * stride) + j));
+                    (__m256i *)(dis_center_row + j));
                 __m256i result2 = _mm256_mulhi_epu16(ref1, f1);
                 __m256i result2lo = _mm256_mullo_epi16(ref1, f1);
                 rmul1 = _mm256_unpacklo_epi16(result2lo, result2);
@@ -788,20 +822,18 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
             }
 
             /* --- Symmetric pairs (tap = 0 .. fwidth/2-1) --- */
-            for (unsigned tap = 0; tap < fwidth / 2; ++tap) {
-                int ii_lo = i - fwidth / 2 + tap;
-                int ii_hi = i + fwidth / 2 - tap;
+            for (unsigned tap = 0; tap < (unsigned)(fwidth / 2); ++tap) {
                 __m256i f1 = vf_epi16[tap];
 
-                /* Load both symmetric rows */
+                /* Load both symmetric rows (pointers precomputed) */
                 __m256i ref_lo_v = _mm256_loadu_si256(
-                    (__m256i *)(ref + (ii_lo * stride) + j));
+                    (__m256i *)(ref_row_above[tap] + j));
                 __m256i ref_hi_v = _mm256_loadu_si256(
-                    (__m256i *)(ref + (ii_hi * stride) + j));
+                    (__m256i *)(ref_row_below[tap] + j));
                 __m256i dis_lo_v = _mm256_loadu_si256(
-                    (__m256i *)(dis + (ii_lo * stride) + j));
+                    (__m256i *)(dis_row_above[tap] + j));
                 __m256i dis_hi_v = _mm256_loadu_si256(
-                    (__m256i *)(dis + (ii_hi * stride) + j));
+                    (__m256i *)(dis_row_below[tap] + j));
 
                 /* mu1: ref_lo * f1 */
                 __m256i rhi = _mm256_mulhi_epu16(ref_lo_v, f1);
