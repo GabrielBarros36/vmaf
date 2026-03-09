@@ -3478,9 +3478,9 @@ static inline void dwt2_horz_scalar_one(
 }
 
 /*
- * AVX2 horizontal pass for int32 intermediate -> int32 output.
- * Processes 4 output elements at a time for one stream.
- * Uses gather for stride-2 access pattern of the FIR filter.
+ * Fused AVX2 horizontal pass for int32 intermediate -> int32 output.
+ * Processes 4 output elements for TWO bands simultaneously from the same
+ * input buffer, eliminating redundant memory loads and permutes.
  *
  * For interior pixels (j_start=1 to w_half-3), ind_x[k][j] = 2j + k - 1.
  * For 4 output positions j, j+1, j+2, j+3:
@@ -3488,20 +3488,19 @@ static inline void dwt2_horz_scalar_one(
  *   tap1[n] = tmp[2(j+n)]      (stride-2 starting at 2j)
  *   tap2[n] = tmp[2(j+n) + 1]  (stride-2 starting at 2j+1)
  *   tap3[n] = tmp[2(j+n) + 2]  (stride-2 starting at 2j+2)
+ *
+ * Computes: out_a = lo_coeff . taps, out_b = hi_coeff . taps
+ * This saves 50% of loads compared to calling the single-band version twice.
  */
-static inline void dwt2_horz_avx2_4(
+static inline void dwt2_horz_avx2_4_fused(
     const int32_t *tmp, int base,
-    __m128i coeff0, __m128i coeff1, __m128i coeff2, __m128i coeff3,
+    __m128i lo_c0, __m128i lo_c1, __m128i lo_c2, __m128i lo_c3,
+    __m128i hi_c0, __m128i hi_c1, __m128i hi_c2, __m128i hi_c3,
     __m256i rounding, int shift,
-    int32_t *out, int out_offset)
+    int32_t *out_a, int32_t *out_b, int out_offset)
 {
     /* Load contiguous int32 values and extract stride-2 taps via permute.
-     * For 4 outputs at positions j..j+3 (base = 2j-1):
-     *   t0 = [base+0, base+2, base+4, base+6] (even of block0)
-     *   t1 = [base+1, base+3, base+5, base+7] (odd  of block0)
-     *   t2 = [base+2, base+4, base+6, base+8] (even of block1)
-     *   t3 = [base+3, base+5, base+7, base+9] (odd  of block1)
-     * Two 256-bit loads cover the needed range. */
+     * Two 256-bit loads cover the needed range [base..base+9]. */
     __m256i block0 = _mm256_loadu_si256((const __m256i *)(tmp + base));      /* [0..7] */
     __m256i block1 = _mm256_loadu_si256((const __m256i *)(tmp + base + 2));  /* [2..9] */
 
@@ -3514,41 +3513,49 @@ static inline void dwt2_horz_avx2_4(
     __m128i t2 = _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(block1, perm_even));
     __m128i t3 = _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(block1, perm_odd));
 
-    /* Multiply each tap by its coefficient and accumulate in int64.
-     * _mm256_mul_epi32 multiplies even 32-bit lanes producing 64-bit results.
-     * For 4 elements, promote __m128i to __m256i and use _mm256_mul_epi32
-     * for even lanes, then shuffle for odd lanes. */
-
-    /* Widen tap values and coefficients to 256-bit for int64 multiplication */
+    /* Widen tap values to 256-bit (4 x int64) - shared between both filters */
     __m256i w_t0 = _mm256_cvtepi32_epi64(t0);
     __m256i w_t1 = _mm256_cvtepi32_epi64(t1);
     __m256i w_t2 = _mm256_cvtepi32_epi64(t2);
     __m256i w_t3 = _mm256_cvtepi32_epi64(t3);
 
-    __m256i w_c0 = _mm256_cvtepi32_epi64(coeff0);
-    __m256i w_c1 = _mm256_cvtepi32_epi64(coeff1);
-    __m256i w_c2 = _mm256_cvtepi32_epi64(coeff2);
-    __m256i w_c3 = _mm256_cvtepi32_epi64(coeff3);
+    /* --- Band A: lo filter coefficients --- */
+    __m256i w_lc0 = _mm256_cvtepi32_epi64(lo_c0);
+    __m256i w_lc1 = _mm256_cvtepi32_epi64(lo_c1);
+    __m256i w_lc2 = _mm256_cvtepi32_epi64(lo_c2);
+    __m256i w_lc3 = _mm256_cvtepi32_epi64(lo_c3);
 
-    /* Multiply-accumulate in int64: acc = c0*t0 + c1*t1 + c2*t2 + c3*t3 */
-    __m256i acc = _mm256_mul_epi32(w_t0, w_c0);  /* 4 int64 products */
-    acc = _mm256_add_epi64(acc, _mm256_mul_epi32(w_t1, w_c1));
-    acc = _mm256_add_epi64(acc, _mm256_mul_epi32(w_t2, w_c2));
-    acc = _mm256_add_epi64(acc, _mm256_mul_epi32(w_t3, w_c3));
+    __m256i acc_a = _mm256_mul_epi32(w_t0, w_lc0);
+    acc_a = _mm256_add_epi64(acc_a, _mm256_mul_epi32(w_t1, w_lc1));
+    acc_a = _mm256_add_epi64(acc_a, _mm256_mul_epi32(w_t2, w_lc2));
+    acc_a = _mm256_add_epi64(acc_a, _mm256_mul_epi32(w_t3, w_lc3));
 
-    /* Add rounding and shift */
-    acc = _mm256_add_epi64(acc, rounding);
-    acc = srai_epi64_256(acc, shift);
+    acc_a = _mm256_add_epi64(acc_a, rounding);
+    acc_a = srai_epi64_256(acc_a, shift);
 
-    /* Truncate int64 -> int32: extract low 32 bits of each 64-bit lane */
-    /* Shuffle to pack: we need elements at positions 0,2,4,6 (32-bit view) */
-    __m256i shuffled = _mm256_shuffle_epi32(acc, 0x08); /* 00 00 10 00: pack pairs */
-    /* Extract 128-bit halves and combine */
-    __m128i lo = _mm256_castsi256_si128(shuffled);
-    __m128i hi = _mm256_extracti128_si256(shuffled, 1);
-    __m128i result = _mm_unpacklo_epi64(lo, hi);
+    __m256i shuf_a = _mm256_shuffle_epi32(acc_a, 0x08);
+    __m128i lo_a = _mm256_castsi256_si128(shuf_a);
+    __m128i hi_a = _mm256_extracti128_si256(shuf_a, 1);
+    _mm_storeu_si128((__m128i *)(out_a + out_offset), _mm_unpacklo_epi64(lo_a, hi_a));
 
-    _mm_storeu_si128((__m128i *)(out + out_offset), result);
+    /* --- Band B: hi filter coefficients --- */
+    __m256i w_hc0 = _mm256_cvtepi32_epi64(hi_c0);
+    __m256i w_hc1 = _mm256_cvtepi32_epi64(hi_c1);
+    __m256i w_hc2 = _mm256_cvtepi32_epi64(hi_c2);
+    __m256i w_hc3 = _mm256_cvtepi32_epi64(hi_c3);
+
+    __m256i acc_b = _mm256_mul_epi32(w_t0, w_hc0);
+    acc_b = _mm256_add_epi64(acc_b, _mm256_mul_epi32(w_t1, w_hc1));
+    acc_b = _mm256_add_epi64(acc_b, _mm256_mul_epi32(w_t2, w_hc2));
+    acc_b = _mm256_add_epi64(acc_b, _mm256_mul_epi32(w_t3, w_hc3));
+
+    acc_b = _mm256_add_epi64(acc_b, rounding);
+    acc_b = srai_epi64_256(acc_b, shift);
+
+    __m256i shuf_b = _mm256_shuffle_epi32(acc_b, 0x08);
+    __m128i lo_b = _mm256_castsi256_si128(shuf_b);
+    __m128i hi_b = _mm256_extracti128_si256(shuf_b, 1);
+    _mm_storeu_si128((__m128i *)(out_b + out_offset), _mm_unpacklo_epi64(lo_b, hi_b));
 }
 
 void adm_dwt2_s1_combined_avx2(const int16_t *i2_ref_scale,
@@ -3701,53 +3708,40 @@ void adm_dwt2_s1_combined_avx2(const int16_t *i2_ref_scale,
 
         /* Interior pixels: SIMD 4 at a time */
         int j_simd_end = w_half - 2;  /* exclusive; last 2 are boundary */
-        /* Ensure we don't go past the interior region */
-        int j_simd_stop = j_simd_end - ((j_simd_end - 1) % 4);
-        /* Process 4 outputs per iteration starting from j=1 */
+        /* Process 4 outputs per iteration starting from j=1.
+         * Fused: each call loads data once, computes both lo and hi filter bands. */
         for (j = 1; j + 3 < j_simd_end; j += 4)
         {
             int base = 2 * j - 1;  /* ind_x[0][j] = 2j-1 for interior */
-            /* Ref lo -> band_a */
-            dwt2_horz_avx2_4(tmplo_ref, base,
+            /* Ref tmplo -> band_a (lo) + band_v (hi) */
+            dwt2_horz_avx2_4_fused(tmplo_ref, base,
                               hc_lo0, hc_lo1, hc_lo2, hc_lo3,
-                              h_rounding, shift_HP,
-                              i4_ref_dwt2->band_a, out_off + j);
-            /* Ref lo -> band_v */
-            dwt2_horz_avx2_4(tmplo_ref, base,
                               hc_hi0, hc_hi1, hc_hi2, hc_hi3,
                               h_rounding, shift_HP,
-                              i4_ref_dwt2->band_v, out_off + j);
-            /* Ref hi -> band_h */
-            dwt2_horz_avx2_4(tmphi_ref, base,
+                              i4_ref_dwt2->band_a, i4_ref_dwt2->band_v,
+                              out_off + j);
+            /* Ref tmphi -> band_h (lo) + band_d (hi) */
+            dwt2_horz_avx2_4_fused(tmphi_ref, base,
                               hc_lo0, hc_lo1, hc_lo2, hc_lo3,
-                              h_rounding, shift_HP,
-                              i4_ref_dwt2->band_h, out_off + j);
-            /* Ref hi -> band_d */
-            dwt2_horz_avx2_4(tmphi_ref, base,
                               hc_hi0, hc_hi1, hc_hi2, hc_hi3,
                               h_rounding, shift_HP,
-                              i4_ref_dwt2->band_d, out_off + j);
+                              i4_ref_dwt2->band_h, i4_ref_dwt2->band_d,
+                              out_off + j);
 
-            /* Dis lo -> band_a */
-            dwt2_horz_avx2_4(tmplo_dis, base,
+            /* Dis tmplo -> band_a (lo) + band_v (hi) */
+            dwt2_horz_avx2_4_fused(tmplo_dis, base,
                               hc_lo0, hc_lo1, hc_lo2, hc_lo3,
-                              h_rounding, shift_HP,
-                              i4_dis_dwt2->band_a, out_off + j);
-            /* Dis lo -> band_v */
-            dwt2_horz_avx2_4(tmplo_dis, base,
                               hc_hi0, hc_hi1, hc_hi2, hc_hi3,
                               h_rounding, shift_HP,
-                              i4_dis_dwt2->band_v, out_off + j);
-            /* Dis hi -> band_h */
-            dwt2_horz_avx2_4(tmphi_dis, base,
+                              i4_dis_dwt2->band_a, i4_dis_dwt2->band_v,
+                              out_off + j);
+            /* Dis tmphi -> band_h (lo) + band_d (hi) */
+            dwt2_horz_avx2_4_fused(tmphi_dis, base,
                               hc_lo0, hc_lo1, hc_lo2, hc_lo3,
-                              h_rounding, shift_HP,
-                              i4_dis_dwt2->band_h, out_off + j);
-            /* Dis hi -> band_d */
-            dwt2_horz_avx2_4(tmphi_dis, base,
                               hc_hi0, hc_hi1, hc_hi2, hc_hi3,
                               h_rounding, shift_HP,
-                              i4_dis_dwt2->band_d, out_off + j);
+                              i4_dis_dwt2->band_h, i4_dis_dwt2->band_d,
+                              out_off + j);
         }
 
         /* Remaining interior + boundary pixels (scalar) */
@@ -3961,41 +3955,35 @@ void adm_dwt2_s123_combined_avx2(const int32_t *i4_ref_scale,
         for (j = 1; j + 3 < j_simd_end; j += 4)
         {
             int base = 2 * j - 1;
-            /* Ref */
-            dwt2_horz_avx2_4(tmplo_ref, base,
+            /* Ref tmplo -> band_a (lo) + band_v (hi) */
+            dwt2_horz_avx2_4_fused(tmplo_ref, base,
                               hc_lo0, hc_lo1, hc_lo2, hc_lo3,
-                              h_rounding, shift_HP,
-                              i4_ref_dwt2->band_a, out_off + j);
-            dwt2_horz_avx2_4(tmplo_ref, base,
                               hc_hi0, hc_hi1, hc_hi2, hc_hi3,
                               h_rounding, shift_HP,
-                              i4_ref_dwt2->band_v, out_off + j);
-            dwt2_horz_avx2_4(tmphi_ref, base,
+                              i4_ref_dwt2->band_a, i4_ref_dwt2->band_v,
+                              out_off + j);
+            /* Ref tmphi -> band_h (lo) + band_d (hi) */
+            dwt2_horz_avx2_4_fused(tmphi_ref, base,
                               hc_lo0, hc_lo1, hc_lo2, hc_lo3,
-                              h_rounding, shift_HP,
-                              i4_ref_dwt2->band_h, out_off + j);
-            dwt2_horz_avx2_4(tmphi_ref, base,
                               hc_hi0, hc_hi1, hc_hi2, hc_hi3,
                               h_rounding, shift_HP,
-                              i4_ref_dwt2->band_d, out_off + j);
+                              i4_ref_dwt2->band_h, i4_ref_dwt2->band_d,
+                              out_off + j);
 
-            /* Dis */
-            dwt2_horz_avx2_4(tmplo_dis, base,
+            /* Dis tmplo -> band_a (lo) + band_v (hi) */
+            dwt2_horz_avx2_4_fused(tmplo_dis, base,
                               hc_lo0, hc_lo1, hc_lo2, hc_lo3,
-                              h_rounding, shift_HP,
-                              i4_dis_dwt2->band_a, out_off + j);
-            dwt2_horz_avx2_4(tmplo_dis, base,
                               hc_hi0, hc_hi1, hc_hi2, hc_hi3,
                               h_rounding, shift_HP,
-                              i4_dis_dwt2->band_v, out_off + j);
-            dwt2_horz_avx2_4(tmphi_dis, base,
+                              i4_dis_dwt2->band_a, i4_dis_dwt2->band_v,
+                              out_off + j);
+            /* Dis tmphi -> band_h (lo) + band_d (hi) */
+            dwt2_horz_avx2_4_fused(tmphi_dis, base,
                               hc_lo0, hc_lo1, hc_lo2, hc_lo3,
-                              h_rounding, shift_HP,
-                              i4_dis_dwt2->band_h, out_off + j);
-            dwt2_horz_avx2_4(tmphi_dis, base,
                               hc_hi0, hc_hi1, hc_hi2, hc_hi3,
                               h_rounding, shift_HP,
-                              i4_dis_dwt2->band_d, out_off + j);
+                              i4_dis_dwt2->band_h, i4_dis_dwt2->band_d,
+                              out_off + j);
         }
 
         /* Remaining interior + boundary pixels (scalar) */

@@ -132,6 +132,43 @@ static FORCE_INLINE int32_t hsum_epi32(__m256i v) {
 }
 
 /*
+ * Vectorized log2_32 sum: compute sum of log2_32(vals[i]) for masked elements.
+ * Uses float exponent extraction for CLZ equivalent + gather for table lookup.
+ *
+ * log2_table: uint16_t[65537] log2 lookup table
+ * vals: 8 x int32 values (must be > 0 for all masked lanes)
+ * mask_v: 8 x int32 mask (-1 for active, 0 for inactive)
+ * Returns sum of log2_32(vals[i]) for active elements.
+ */
+static FORCE_INLINE int64_t vec_log2_32_masked_sum(
+    const uint16_t *log2_table, __m256i vals, __m256i mask_v)
+{
+    /* floor(log2(x)) via float exponent: cvt to float, extract exponent bits.
+     * For x in [2^n, 2^(n+1)), float exponent field = n + 127.
+     * We need k = 16 - __builtin_clz(x) = floor(log2(x)) - 15.
+     * So k = (exponent - 127) - 15 = exponent - 142. */
+    __m256 f = _mm256_cvtepi32_ps(vals);
+    __m256i fbits = _mm256_castps_si256(f);
+    __m256i exp_biased = _mm256_srli_epi32(fbits, 23);
+    __m256i k = _mm256_sub_epi32(exp_biased, _mm256_set1_epi32(142));
+
+    /* table_idx = vals >> k, normalizes to [2^15, 2^16) range */
+    __m256i table_idx = _mm256_srlv_epi32(vals, k);
+
+    /* Gather from uint16_t table with scale=2 (byte offset = idx * 2).
+     * Reads 32 bits starting at &log2_table[idx]; mask off upper 16 bits. */
+    __m256i table_vals = _mm256_i32gather_epi32(
+        (const int *)log2_table, table_idx, 2);
+    table_vals = _mm256_and_si256(table_vals, _mm256_set1_epi32(0xFFFF));
+
+    /* result[i] = table_vals[i] + 2048 * k[i], masked to active lanes */
+    __m256i result = _mm256_add_epi32(table_vals, _mm256_slli_epi32(k, 11));
+    result = _mm256_and_si256(result, mask_v);
+
+    return (int64_t)hsum_epi32(result);
+}
+
+/*
  * Vectorized threshold comparison and non-log accumulation for 8 elements.
  * Processes one __m256i chunk of xx, yy, xy:
  *   - Non-log path (sigma1_sq < sigma_nsq): accumulates sigma2_sq and count
@@ -166,9 +203,9 @@ do { \
         /* g = sigma12 / (sigma1_sq + eps) — 2 vector divides for 8 elements */ \
         __m256d g0_ = _mm256_div_pd(xy_d0_, _mm256_add_pd(xx_d0_, eps_v_)); \
         __m256d g1_ = _mm256_div_pd(xy_d1_, _mm256_add_pd(xx_d1_, eps_v_)); \
-        /* sv_sq = sigma2_sq - g * sigma12 (unclamped g) */ \
-        __m256d sv0_ = _mm256_sub_pd(yy_d0_, _mm256_mul_pd(g0_, xy_d0_)); \
-        __m256d sv1_ = _mm256_sub_pd(yy_d1_, _mm256_mul_pd(g1_, xy_d1_)); \
+        /* sv_sq = sigma2_sq - g * sigma12 (unclamped g), using FMA: fnmadd = -(a*b)+c */ \
+        __m256d sv0_ = _mm256_fnmadd_pd(g0_, xy_d0_, yy_d0_); \
+        __m256d sv1_ = _mm256_fnmadd_pd(g1_, xy_d1_, yy_d1_); \
         /* g = min(g, limit) — clamp after sv_sq computation */ \
         g0_ = _mm256_min_pd(g0_, limit_v_); \
         g1_ = _mm256_min_pd(g1_, limit_v_); \
@@ -180,15 +217,20 @@ do { \
         _mm256_store_pd(&sv_arr_[4], sv1_); \
         _mm256_store_pd(&gg_xx_arr_[0], gg_xx0_); \
         _mm256_store_pd(&gg_xx_arr_[4], gg_xx1_); \
-        /* Scalar loop: log table lookups (not vectorizable without gather) */ \
+        /* Vectorized den_log: log2_32(sigma_nsq + sigma1_sq) for all masked lanes */ \
+        { \
+            __m256i den_vals_ = _mm256_add_epi32(xx_v, _mm256_set1_epi32(sigma_nsq)); \
+            int64_t den_sum_ = vec_log2_32_masked_sum(log2_table, den_vals_, mask_); \
+            int den_count_ = __builtin_popcount(log_mask_ps_); \
+            accum_den_log += den_sum_ - (int64_t)den_count_ * 2048 * 17; \
+        } \
+        /* Scalar loop: num_log needs log2_64 + conditional (not vectorizable) */ \
         unsigned int log_bits_ = (unsigned int)log_mask_ps_; \
         while (log_bits_) { \
             int b_ = __builtin_ctz(log_bits_); \
             log_bits_ &= log_bits_ - 1; \
-            int32_t sigma1_sq_ = (int32_t)(xx)[(base) + b_]; \
             int32_t sigma2_sq_ = (int32_t)(yy)[(base) + b_]; \
             int32_t sigma12_ = (int32_t)(xy)[(base) + b_]; \
-            accum_den_log += log2_32(log2_table, sigma_nsq + sigma1_sq_) - 2048 * 17; \
             if (sigma12_ > 0 && sigma2_sq_ > 0) { \
                 int32_t sv_sq_ = (int32_t)sv_arr_[b_]; \
                 sv_sq_ = (uint32_t)(MAX(sv_sq_, 0)); \
