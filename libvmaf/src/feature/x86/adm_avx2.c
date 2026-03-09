@@ -773,17 +773,13 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
             int mask_hi = _mm256_movemask_pd(angle_d_hi); /* 4-bit mask */
             int full_mask = mask_lo | (mask_hi << 4);      /* 8-bit mask */
 
-            /* Create int32 mask from the 8-bit mask */
-            __m256i angle_mask = _mm256_set_epi32(
-                (full_mask & 0x80) ? -1 : 0,
-                (full_mask & 0x40) ? -1 : 0,
-                (full_mask & 0x20) ? -1 : 0,
-                (full_mask & 0x10) ? -1 : 0,
-                (full_mask & 0x08) ? -1 : 0,
-                (full_mask & 0x04) ? -1 : 0,
-                (full_mask & 0x02) ? -1 : 0,
-                (full_mask & 0x01) ? -1 : 0
-            );
+            /* Expand 8-bit mask to 8x int32 mask using bit-select trick */
+            __m256i angle_mask = _mm256_cmpgt_epi32(
+                _mm256_and_si256(
+                    _mm256_set1_epi32(full_mask),
+                    _mm256_set_epi32(0x80, 0x40, 0x20, 0x10,
+                                     0x08, 0x04, 0x02, 0x01)),
+                v_zero);
             __m256 angle_mask_f = _mm256_castsi256_ps(angle_mask);
 
             /*

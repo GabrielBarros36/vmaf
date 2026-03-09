@@ -31,6 +31,7 @@
 /* Maximum filter width across all scales (scale 0 = 17 taps) */
 #define VIF_FILT_MAX 17
 
+
 #if defined __GNUC__
 #define ALIGNED(x) __attribute__ ((aligned (x)))
 #elif defined (_MSC_VER)  && (!defined UNDER_CE)
