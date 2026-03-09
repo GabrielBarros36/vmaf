@@ -48,6 +48,12 @@ typedef struct AdmState {
     void (*dwt2_8)(const uint8_t *src, const adm_dwt_band_t *dst,
                    AdmBuffer *buf, int w, int h, int src_stride,
                    int dst_stride);
+    void (*adm_decouple)(AdmBuffer *buf, int w, int h, int stride,
+                         double adm_enhn_gain_limit,
+                         const int32_t *div_lookup_ptr);
+    void (*adm_csf_func)(AdmBuffer *buf, int w, int h, int stride,
+                         uint16_t i_rfactor[3], uint8_t i_shifts[3],
+                         uint16_t i_shiftsadd[3]);
     VmafDictionary *feature_name_dict;
 } AdmState;
 
@@ -665,8 +671,10 @@ static void dwt2_src_indices_filt(int **src_ind_y, int **src_ind_x, int w, int h
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
 static void adm_decouple(AdmBuffer *RESTRICT buf, int w, int h, int stride,
-                         double adm_enhn_gain_limit)
+                         double adm_enhn_gain_limit,
+                         const int32_t *div_lookup_ptr)
 {
+    (void)div_lookup_ptr; /* C reference uses file-scope div_lookup directly */
     const float cos_1deg_sq = cos(1.0 * M_PI / 180.0) * cos(1.0 * M_PI / 180.0);
 
     const adm_dwt_band_t *ref = &buf->ref_dwt2;
@@ -936,9 +944,9 @@ static void adm_decouple_s123(AdmBuffer *RESTRICT buf, int w, int h, int stride,
     }
 }
 
-static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
-                    const float csf_factors[4][2],
-                    double adm_norm_view_dist, int adm_ref_display_height)
+static void adm_csf_inner(AdmBuffer *buf, int w, int h, int stride,
+                          uint16_t i_rfactor[3], uint8_t i_shifts[3],
+                          uint16_t i_shiftsadd[3])
 {
     const adm_dwt_band_t *src = &buf->decouple_a;
     const adm_dwt_band_t *dst = &buf->csf_a;
@@ -948,45 +956,6 @@ static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
     int16_t *dst_angles[3] = { dst->band_h, dst->band_v, dst->band_d };
     int16_t *flt_angles[3] = { flt->band_h, flt->band_v, flt->band_d };
 
-    // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
-    // 1 to 4 (from finest scale to coarsest scale).
-    // 0 is scale zero - use precomputed CSF factors
-
-    const float factor1 = csf_factors[0][0];
-    const float factor2 = csf_factors[0][1];
-    const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
-
-    /**
-     * rfactor is converted to fixed-point for scale0 and stored in i_rfactor
-     * multiplied by 2^21 for rfactor[0,1] and by 2^23 for rfactor[2].
-     * For adm_norm_view_dist 3.0 and adm_ref_display_height 1080,
-     * i_rfactor is around { 36453,36453,49417 }
-     */
-    uint16_t i_rfactor[3];
-    if (fabs(adm_norm_view_dist * adm_ref_display_height - DEFAULT_ADM_NORM_VIEW_DIST * DEFAULT_ADM_REF_DISPLAY_HEIGHT) < 1.0e-8) {
-        i_rfactor[0] = 36453;
-        i_rfactor[1] = 36453;
-        i_rfactor[2] = 49417;
-    }
-    else {
-        const double pow2_21 = pow(2, 21);
-        const double pow2_23 = pow(2, 23);
-        i_rfactor[0] = (uint16_t) (rfactor1[0] * pow2_21);
-        i_rfactor[1] = (uint16_t) (rfactor1[1] * pow2_21);
-        i_rfactor[2] = (uint16_t) (rfactor1[2] * pow2_23);
-    }
-
-    /**
-     * Shifts pending from previous stage is 6
-     * hence variables multiplied by i_rfactor[0,1] has to be shifted by 21+6=27 to convert
-     * into floating-point. But shifted by 15 to make it Q16
-     * and variables multiplied by i_factor[2] has to be shifted by 23+6=29 to convert into
-     * floating-point. But shifted by 17 to make it Q16
-     * Hence remaining shifts after shifting by i_shifts is 12 to make it equivalent to
-     * floating-point
-     */
-    uint8_t i_shifts[3] = { 15,15,17 };
-    uint16_t i_shiftsadd[3] = { 16384, 16384, 65535 };
     uint16_t FIX_ONE_BY_30 = 4369; //(1/30)*2^17
     /* The computation of the csf values is not required for the regions which
      *lie outside the frame borders
@@ -1027,6 +996,55 @@ static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
             }
         }
     }
+}
+
+static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
+                    const float csf_factors[4][2],
+                    double adm_norm_view_dist, int adm_ref_display_height,
+                    void (*csf_func)(AdmBuffer *, int, int, int,
+                                     uint16_t[3], uint8_t[3], uint16_t[3]))
+{
+    // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
+    // 1 to 4 (from finest scale to coarsest scale).
+    // 0 is scale zero - use precomputed CSF factors
+
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
+    const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
+
+    /**
+     * rfactor is converted to fixed-point for scale0 and stored in i_rfactor
+     * multiplied by 2^21 for rfactor[0,1] and by 2^23 for rfactor[2].
+     * For adm_norm_view_dist 3.0 and adm_ref_display_height 1080,
+     * i_rfactor is around { 36453,36453,49417 }
+     */
+    uint16_t i_rfactor[3];
+    if (fabs(adm_norm_view_dist * adm_ref_display_height - DEFAULT_ADM_NORM_VIEW_DIST * DEFAULT_ADM_REF_DISPLAY_HEIGHT) < 1.0e-8) {
+        i_rfactor[0] = 36453;
+        i_rfactor[1] = 36453;
+        i_rfactor[2] = 49417;
+    }
+    else {
+        const double pow2_21 = pow(2, 21);
+        const double pow2_23 = pow(2, 23);
+        i_rfactor[0] = (uint16_t) (rfactor1[0] * pow2_21);
+        i_rfactor[1] = (uint16_t) (rfactor1[1] * pow2_21);
+        i_rfactor[2] = (uint16_t) (rfactor1[2] * pow2_23);
+    }
+
+    /**
+     * Shifts pending from previous stage is 6
+     * hence variables multiplied by i_rfactor[0,1] has to be shifted by 21+6=27 to convert
+     * into floating-point. But shifted by 15 to make it Q16
+     * and variables multiplied by i_factor[2] has to be shifted by 23+6=29 to convert into
+     * floating-point. But shifted by 17 to make it Q16
+     * Hence remaining shifts after shifting by i_shifts is 12 to make it equivalent to
+     * floating-point
+     */
+    uint8_t i_shifts[3] = { 15,15,17 };
+    uint16_t i_shiftsadd[3] = { 16384, 16384, 65535 };
+
+    csf_func(buf, w, h, stride, i_rfactor, i_shifts, i_shiftsadd);
 }
 
 static void i4_adm_csf(AdmBuffer *RESTRICT buf, int scale, int w, int h, int stride,
@@ -2671,13 +2689,13 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
 
-			adm_decouple(buf, w, h, buf_stride, adm_enhn_gain_limit);
+			s->adm_decouple(buf, w, h, buf_stride, adm_enhn_gain_limit, div_lookup);
 
 			den_scale = adm_csf_den_scale(&buf->ref_dwt2, w, h, buf_stride,
                                  csf_factors);
 
 			adm_csf(buf, w, h, buf_stride, csf_factors,
-                    adm_norm_view_dist, adm_ref_display_height);
+                    adm_norm_view_dist, adm_ref_display_height, s->adm_csf_func);
 
 			num_scale = adm_cm(buf, w, h, buf_stride, buf_stride,
                                csf_factors,
@@ -2814,11 +2832,15 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     }
 
     s->dwt2_8 = adm_dwt2_8;
+    s->adm_decouple = adm_decouple;
+    s->adm_csf_func = adm_csf_inner;
 
 #if ARCH_X86
     unsigned flags = vmaf_get_cpu_flags();
     if (flags & VMAF_X86_CPU_FLAG_AVX2) {
         if (!(w % 8)) s->dwt2_8 = adm_dwt2_8_avx2;
+        s->adm_decouple = adm_decouple_avx2;
+        s->adm_csf_func = adm_csf_avx2;
     }
 #elif ARCH_AARCH64
     unsigned flags = vmaf_get_cpu_flags();
