@@ -278,10 +278,10 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
                 acc1_hi = _mm256_srli_epi64(_mm256_add_epi64(acc1_hi, _mm256_set1_epi64x(0x80000000)), 32);
 
 
-                __m256i acc0_sq = _mm256_blend_epi32(acc0_lo, _mm256_slli_si256(acc0_hi, 4), 0xAA);
-                __m256i acc1_sq = _mm256_blend_epi32(acc1_lo, _mm256_slli_si256(acc1_hi, 4), 0xAA);
-                mu1sq_lo = acc0_sq;
-                mu1sq_hi = acc1_sq;
+                mu1sq_lo = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0_lo), _mm256_castsi256_ps(acc0_hi), 0x88));
+                mu1sq_hi = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc1_lo), _mm256_castsi256_ps(acc1_hi), 0x88));
             }
 
             // compute mu2 filtered, mu2*mu2 filtered, mu1*mu2 filtered
@@ -331,11 +331,15 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
                 acc1_hi = _mm256_srli_epi64(_mm256_add_epi64(acc1_hi, _mm256_set1_epi64x(0x80000000)), 32);
 
 
-                mu2sq_lo = _mm256_blend_epi32(acc0_lo, _mm256_slli_si256(acc0_hi, 4), 0xAA);
-                mu2sq_hi = _mm256_blend_epi32(acc1_lo, _mm256_slli_si256(acc1_hi, 4), 0xAA);
+                mu2sq_lo = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0_lo), _mm256_castsi256_ps(acc0_hi), 0x88));
+                mu2sq_hi = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc1_lo), _mm256_castsi256_ps(acc1_hi), 0x88));
 
-                mu1mu2_lo = _mm256_blend_epi32(mu1lo_lo, _mm256_slli_si256(mu1lo_hi, 4), 0xAA);
-                mu1mu2_hi = _mm256_blend_epi32(mu1hi_lo, _mm256_slli_si256(mu1hi_hi, 4), 0xAA);
+                mu1mu2_lo = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(mu1lo_lo), _mm256_castsi256_ps(mu1lo_hi), 0x88));
+                mu1mu2_hi = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(mu1hi_lo), _mm256_castsi256_ps(mu1hi_hi), 0x88));
             }
 
             // compute yy, that is refsq filtered - mu1 * mu1
@@ -372,15 +376,13 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
                 acc2 = _mm256_srli_epi64(acc2, 16);
                 acc3 = _mm256_srli_epi64(acc3, 16);
 
-                acc0 = _mm256_blend_epi32(acc0, _mm256_slli_si256(acc1, 4), 0xAA);
-                acc1 = _mm256_blend_epi32(acc2, _mm256_slli_si256(acc3, 4), 0xAA);
+                acc0 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0), _mm256_castsi256_ps(acc1), 0x88));
+                acc1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc2), _mm256_castsi256_ps(acc3), 0x88));
 
-                //mu1sq is shuffled
                 acc0 = _mm256_sub_epi32(acc0, mu1sq_lo);
                 acc1 = _mm256_sub_epi32(acc1, mu1sq_hi);
-
-                acc0 = _mm256_shuffle_epi32(acc0, 0xD8);
-                acc1 = _mm256_shuffle_epi32(acc1, 0xD8);
 
                 _mm256_storeu_si256((__m256i*)& xx[0], acc0);
                 _mm256_storeu_si256((__m256i*)& xx[8], acc1);
@@ -420,15 +422,13 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
                 acc2 = _mm256_srli_epi64(acc2, 16);
                 acc3 = _mm256_srli_epi64(acc3, 16);
 
-                acc0 = _mm256_blend_epi32(acc0, _mm256_slli_si256(acc1, 4), 0xAA);
-                acc1 = _mm256_blend_epi32(acc2, _mm256_slli_si256(acc3, 4), 0xAA);
+                acc0 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0), _mm256_castsi256_ps(acc1), 0x88));
+                acc1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc2), _mm256_castsi256_ps(acc3), 0x88));
 
-                //mu2sq is already shuffled
                 acc0 = _mm256_sub_epi32(acc0, mu2sq_lo);
                 acc1 = _mm256_sub_epi32(acc1, mu2sq_hi);
-
-                acc0 = _mm256_shuffle_epi32(acc0, 0xD8);
-                acc1 = _mm256_shuffle_epi32(acc1, 0xD8);
 
                 _mm256_storeu_si256((__m256i*) & yy[0], _mm256_max_epi32(acc0, _mm256_setzero_si256()));
                 _mm256_storeu_si256((__m256i*) & yy[8], _mm256_max_epi32(acc1, _mm256_setzero_si256()));
@@ -468,15 +468,13 @@ void vif_statistic_8_avx2(struct VifPublicState *s, float *num, float *den, unsi
                 acc2 = _mm256_srli_epi64(acc2, 16);
                 acc3 = _mm256_srli_epi64(acc3, 16);
 
-                acc0 = _mm256_blend_epi32(acc0, _mm256_slli_si256(acc1, 4), 0xAA);
-                acc1 = _mm256_blend_epi32(acc2, _mm256_slli_si256(acc3, 4), 0xAA);
+                acc0 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0), _mm256_castsi256_ps(acc1), 0x88));
+                acc1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc2), _mm256_castsi256_ps(acc3), 0x88));
 
-                //mu1sq is already shuffled
                 acc0 = _mm256_sub_epi32(acc0, mu1mu2_lo);
                 acc1 = _mm256_sub_epi32(acc1, mu1mu2_hi);
-
-                acc0 = _mm256_shuffle_epi32(acc0, 0xD8);
-                acc1 = _mm256_shuffle_epi32(acc1, 0xD8);
 
                 _mm256_storeu_si256((__m256i*) & xy[0], acc0);
                 _mm256_storeu_si256((__m256i*) & xy[8], acc1);
@@ -588,7 +586,6 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
         int ii = i - fwidth_half;
         unsigned n = w >> 4;
         for (unsigned j = 0; j < n << 4; j = j + 16) {
-            __m256i mask2 = _mm256_set_epi32(7, 5, 3, 1, 6, 4, 2, 0);
             int ii_check = ii;
 
             uint16_t *ref = buf.ref;
@@ -716,14 +713,14 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
             accumref3 = _mm256_srli_epi64(accumref3, shift_VP_sq);
             accumref4 = _mm256_srli_epi64(accumref4, shift_VP_sq);
 
-            accumref2 = _mm256_slli_si256(accumref2, 4);
-            accumref1 = _mm256_blend_epi32(accumref1, accumref2, 0xAA);
-            accumref1 = _mm256_permutevar8x32_epi32(accumref1, mask2);
+            accumref1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                _mm256_castsi256_ps(accumref1), _mm256_castsi256_ps(accumref2), 0x88));
+            accumref1 = _mm256_permute4x64_epi64(accumref1, 0xD8);
 
             _mm256_storeu_si256((__m256i *)(buf.tmp.ref + j), accumref1);
-            accumref4 = _mm256_slli_si256(accumref4, 4);
-            accumref3 = _mm256_blend_epi32(accumref3, accumref4, 0xAA);
-            accumref3 = _mm256_permutevar8x32_epi32(accumref3, mask2);
+            accumref3 = _mm256_castps_si256(_mm256_shuffle_ps(
+                _mm256_castsi256_ps(accumref3), _mm256_castsi256_ps(accumref4), 0x88));
+            accumref3 = _mm256_permute4x64_epi64(accumref3, 0xD8);
 
             _mm256_storeu_si256((__m256i *)(buf.tmp.ref + j + 8), accumref3);
 
@@ -736,14 +733,14 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
             accumrefdis3 = _mm256_srli_epi64(accumrefdis3, shift_VP_sq);
             accumrefdis4 = _mm256_srli_epi64(accumrefdis4, shift_VP_sq);
 
-            accumrefdis2 = _mm256_slli_si256(accumrefdis2, 4);
-            accumrefdis1 = _mm256_blend_epi32(accumrefdis1, accumrefdis2, 0xAA);
-            accumrefdis1 = _mm256_permutevar8x32_epi32(accumrefdis1, mask2);
+            accumrefdis1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                _mm256_castsi256_ps(accumrefdis1), _mm256_castsi256_ps(accumrefdis2), 0x88));
+            accumrefdis1 = _mm256_permute4x64_epi64(accumrefdis1, 0xD8);
 
             _mm256_storeu_si256((__m256i *)(buf.tmp.ref_dis + j), accumrefdis1);
-            accumrefdis4 = _mm256_slli_si256(accumrefdis4, 4);
-            accumrefdis3 = _mm256_blend_epi32(accumrefdis3, accumrefdis4, 0xAA);
-            accumrefdis3 = _mm256_permutevar8x32_epi32(accumrefdis3, mask2);
+            accumrefdis3 = _mm256_castps_si256(_mm256_shuffle_ps(
+                _mm256_castsi256_ps(accumrefdis3), _mm256_castsi256_ps(accumrefdis4), 0x88));
+            accumrefdis3 = _mm256_permute4x64_epi64(accumrefdis3, 0xD8);
 
             _mm256_storeu_si256((__m256i *)(buf.tmp.ref_dis + j + 8),
                                 accumrefdis3);
@@ -757,14 +754,14 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
             accumdis3 = _mm256_srli_epi64(accumdis3, shift_VP_sq);
             accumdis4 = _mm256_srli_epi64(accumdis4, shift_VP_sq);
 
-            accumdis2 = _mm256_slli_si256(accumdis2, 4);
-            accumdis1 = _mm256_blend_epi32(accumdis1, accumdis2, 0xAA);
-            accumdis1 = _mm256_permutevar8x32_epi32(accumdis1, mask2);
+            accumdis1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                _mm256_castsi256_ps(accumdis1), _mm256_castsi256_ps(accumdis2), 0x88));
+            accumdis1 = _mm256_permute4x64_epi64(accumdis1, 0xD8);
 
             _mm256_storeu_si256((__m256i *)(buf.tmp.dis + j), accumdis1);
-            accumdis4 = _mm256_slli_si256(accumdis4, 4);
-            accumdis3 = _mm256_blend_epi32(accumdis3, accumdis4, 0xAA);
-            accumdis3 = _mm256_permutevar8x32_epi32(accumdis3, mask2);
+            accumdis3 = _mm256_castps_si256(_mm256_shuffle_ps(
+                _mm256_castsi256_ps(accumdis3), _mm256_castsi256_ps(accumdis4), 0x88));
+            accumdis3 = _mm256_permute4x64_epi64(accumdis3, 0xD8);
 
             _mm256_storeu_si256((__m256i *)(buf.tmp.dis + j + 8), accumdis3);
         }
@@ -844,12 +841,10 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
                 acc1_lo = _mm256_srli_epi64(_mm256_add_epi64(acc1_lo, _mm256_set1_epi64x(0x80000000)), 32);
                 acc1_hi = _mm256_srli_epi64(_mm256_add_epi64(acc1_hi, _mm256_set1_epi64x(0x80000000)), 32);
 
-                __m256i acc0_sq = _mm256_blend_epi32(acc0_lo, _mm256_slli_si256(acc0_hi, 4), 0xAA);
-                acc0_sq = _mm256_shuffle_epi32(acc0_sq, 0xD8);
-                __m256i acc1_sq = _mm256_blend_epi32(acc1_lo, _mm256_slli_si256(acc1_hi, 4), 0xAA);
-                acc1_sq = _mm256_shuffle_epi32(acc1_sq, 0xD8);
-                mu1sq_lo = acc0_sq;
-                mu1sq_hi = acc1_sq;
+                mu1sq_lo = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0_lo), _mm256_castsi256_ps(acc0_hi), 0x88));
+                mu1sq_hi = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc1_lo), _mm256_castsi256_ps(acc1_hi), 0x88));
             }
 
             {
@@ -898,17 +893,15 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
                 acc1_hi = _mm256_srli_epi64(_mm256_add_epi64(acc1_hi, _mm256_set1_epi64x(0x80000000)), 32);
 
 
-                __m256i acc0_sq = _mm256_blend_epi32(acc0_lo, _mm256_slli_si256(acc0_hi, 4), 0xAA);
-                acc0_sq = _mm256_shuffle_epi32(acc0_sq, 0xD8);
-                __m256i acc1_sq = _mm256_blend_epi32(acc1_lo, _mm256_slli_si256(acc1_hi, 4), 0xAA);
-                acc1_sq = _mm256_shuffle_epi32(acc1_sq, 0xD8);
-                mu2sq_lo = acc0_sq;
-                mu2sq_hi = acc1_sq;
+                mu2sq_lo = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0_lo), _mm256_castsi256_ps(acc0_hi), 0x88));
+                mu2sq_hi = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc1_lo), _mm256_castsi256_ps(acc1_hi), 0x88));
 
-                mu1mu2_lo = _mm256_blend_epi32(mu1lo_lo, _mm256_slli_si256(mu1lo_hi, 4), 0xAA);
-                mu1mu2_lo = _mm256_shuffle_epi32(mu1mu2_lo, 0xD8);
-                mu1mu2_hi = _mm256_blend_epi32(mu1hi_lo, _mm256_slli_si256(mu1hi_hi, 4), 0xAA);
-                mu1mu2_hi = _mm256_shuffle_epi32(mu1mu2_hi, 0xD8);
+                mu1mu2_lo = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(mu1lo_lo), _mm256_castsi256_ps(mu1lo_hi), 0x88));
+                mu1mu2_hi = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(mu1hi_lo), _mm256_castsi256_ps(mu1hi_hi), 0x88));
 
 
             }
@@ -937,16 +930,13 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
                 acc2 = _mm256_srli_epi64(acc2, 16);
                 acc3 = _mm256_srli_epi64(acc3, 16);
 
-                __m256i mask1 = _mm256_set_epi32(7, 5, 3, 1, 6, 4, 2, 0);
-
                 // pack acc0,acc1,acc2,acc3 to acc0, acc1
-                acc1 = _mm256_slli_si256(acc1, 4);
-                acc1 = _mm256_blend_epi32(acc0, acc1, 0xAA);
-                acc0 = _mm256_permutevar8x32_epi32(acc1, mask1);
-                acc3 = _mm256_slli_si256(acc3, 4);
-                acc3 = _mm256_blend_epi32(acc2, acc3, 0xAA);
-
-                acc1 = _mm256_permutevar8x32_epi32(acc3, mask1);
+                acc0 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0), _mm256_castsi256_ps(acc1), 0x88));
+                acc0 = _mm256_permute4x64_epi64(acc0, 0xD8);
+                acc1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc2), _mm256_castsi256_ps(acc3), 0x88));
+                acc1 = _mm256_permute4x64_epi64(acc1, 0xD8);
 
                 acc0 = _mm256_sub_epi32(acc0, mu1sq_lo);
                 acc1 = _mm256_sub_epi32(acc1, mu1sq_hi);
@@ -978,15 +968,13 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
                 acc2 = _mm256_srli_epi64(acc2, 16);
                 acc3 = _mm256_srli_epi64(acc3, 16);
 
-                __m256i mask1 = _mm256_set_epi32(7, 5, 3, 1, 6, 4, 2, 0);
-
                 // pack acc0,acc1,acc2,acc3 to acc0, acc1
-                acc1 = _mm256_slli_si256(acc1, 4);
-                acc1 = _mm256_blend_epi32(acc0, acc1, 0xAA);
-                acc0 = _mm256_permutevar8x32_epi32(acc1, mask1);
-                acc3 = _mm256_slli_si256(acc3, 4);
-                acc3 = _mm256_blend_epi32(acc2, acc3, 0xAA);
-                acc1 = _mm256_permutevar8x32_epi32(acc3, mask1);
+                acc0 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0), _mm256_castsi256_ps(acc1), 0x88));
+                acc0 = _mm256_permute4x64_epi64(acc0, 0xD8);
+                acc1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc2), _mm256_castsi256_ps(acc3), 0x88));
+                acc1 = _mm256_permute4x64_epi64(acc1, 0xD8);
 
                 acc0 = _mm256_sub_epi32(acc0, mu2sq_lo);
                 acc1 = _mm256_sub_epi32(acc1, mu2sq_hi);
@@ -1020,15 +1008,13 @@ void vif_statistic_16_avx2(struct VifPublicState *s, float *num, float *den, uns
                 acc2 = _mm256_srli_epi64(acc2, 16);
                 acc3 = _mm256_srli_epi64(acc3, 16);
 
-                __m256i mask1 = _mm256_set_epi32(7, 5, 3, 1, 6, 4, 2, 0);
-
                 // pack acc0,acc1,acc2,acc3 to acc0, acc1
-                acc1 = _mm256_slli_si256(acc1, 4);
-                acc1 = _mm256_blend_epi32(acc0, acc1, 0xAA);
-                acc0 = _mm256_permutevar8x32_epi32(acc1, mask1);
-                acc3 = _mm256_slli_si256(acc3, 4);
-                acc3 = _mm256_blend_epi32(acc2, acc3, 0xAA);
-                acc1 = _mm256_permutevar8x32_epi32(acc3, mask1);
+                acc0 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc0), _mm256_castsi256_ps(acc1), 0x88));
+                acc0 = _mm256_permute4x64_epi64(acc0, 0xD8);
+                acc1 = _mm256_castps_si256(_mm256_shuffle_ps(
+                    _mm256_castsi256_ps(acc2), _mm256_castsi256_ps(acc3), 0x88));
+                acc1 = _mm256_permute4x64_epi64(acc1, 0xD8);
 
                 acc0 = _mm256_sub_epi32(acc0, mu1mu2_lo);
                 acc1 = _mm256_sub_epi32(acc1, mu1mu2_hi);
