@@ -38,9 +38,10 @@ jobs:
 
       - name: Configure
         run: |
-          AVX512_FLAG=""
           if [ "${{ steps.avx512.outputs.supported }}" = "true" ]; then
             AVX512_FLAG="-Denable_avx512=true"
+          else
+            AVX512_FLAG="-Denable_avx512=false"
           fi
           meson setup libvmaf libvmaf/build --buildtype release \
             -Denable_float=true $AVX512_FLAG
