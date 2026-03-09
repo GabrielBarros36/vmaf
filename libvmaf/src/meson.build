@@ -243,6 +243,7 @@ if is_asm_enabled
           feature_src_dir + 'x86/adm_avx2.c',
           feature_src_dir + 'x86/cambi_avx2.c',
           feature_src_dir + 'x86/psnr_avx2.c',
+          feature_src_dir + 'x86/ssim_avx2.c',
       ]
 
       x86_avx2_static_lib = static_library(
@@ -453,6 +454,7 @@ libvmaf_feature_sources = [
     feature_src_dir + 'iqa/ssim_tools.c',
     feature_src_dir + 'iqa/math_utils.c',
     feature_src_dir + 'iqa/convolve.c',
+    feature_src_dir + 'integer_ssim.c',
     feature_src_dir + 'cambi.c',
     feature_src_dir + 'luminance_tools.c',
     feature_src_dir + 'null.c',
