@@ -17,6 +17,7 @@
  */
 
 #include "feature/integer_adm.h"
+#include "feature/common/macros.h"
 
 #include <immintrin.h>
 #include <math.h>
@@ -1082,4 +1083,1116 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
             a->band_d[idx] = td - rst_d;
         }
     }
+}
+
+/* ================================================================
+ * Scalar threshold helper for adm_cm boundary pixels (int16 path).
+ * Computes the 3x3 neighborhood sum across 3 orientations.
+ * For interior pixels (1<=i<=h-2, 1<=j<=w-2).
+ * ================================================================ */
+static inline int32_t adm_cm_thresh_s_i_j_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3],
+    int src_stride, int i, int j)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta] + src_stride * (i - 1);
+        int16_t *flt_ptr = flt_angles[theta] + src_stride * (i - 1);
+        sum += flt_ptr[j - 1] + flt_ptr[j] + flt_ptr[j + 1];
+        src_ptr += src_stride;
+        flt_ptr += src_stride;
+        sum += flt_ptr[j - 1] + flt_ptr[j + 1];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[j])) + 2048) >> 12);
+        flt_ptr += src_stride;
+        sum += flt_ptr[j - 1] + flt_ptr[j] + flt_ptr[j + 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar boundary threshold: i=0, j=0 */
+static inline int32_t adm_cm_thresh_s_0_0_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3], int src_stride)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta];
+        int16_t *flt_ptr = flt_angles[theta];
+        sum += flt_ptr[src_stride + 1] + flt_ptr[src_stride] + flt_ptr[src_stride + 1];
+        sum += flt_ptr[1];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[0])) + 2048) >> 12);
+        sum += flt_ptr[1];
+        sum += flt_ptr[src_stride + 1] + flt_ptr[src_stride] + flt_ptr[src_stride + 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar boundary threshold: i=0, j=1..w-2 */
+static inline int32_t adm_cm_thresh_s_0_j_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3], int src_stride, int j)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta];
+        int16_t *flt_ptr = flt_angles[theta];
+        sum += flt_ptr[src_stride + j - 1] + flt_ptr[src_stride + j] + flt_ptr[src_stride + j + 1];
+        sum += flt_ptr[j - 1];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[j])) + 2048) >> 12);
+        sum += flt_ptr[j + 1];
+        sum += flt_ptr[src_stride + j - 1] + flt_ptr[src_stride + j] + flt_ptr[src_stride + j + 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar boundary threshold: i=0, j=w-1 */
+static inline int32_t adm_cm_thresh_s_0_wm1_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3], int src_stride, int w)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta];
+        int16_t *flt_ptr = flt_angles[theta];
+        sum += flt_ptr[src_stride + w - 2] + flt_ptr[src_stride + w - 1] + flt_ptr[src_stride + w - 1];
+        sum += flt_ptr[w - 2];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[w - 1])) + 2048) >> 12);
+        sum += flt_ptr[w - 1];
+        sum += flt_ptr[src_stride + w - 2] + flt_ptr[src_stride + w - 1] + flt_ptr[src_stride + w - 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar boundary threshold: i=1..h-2, j=0 */
+static inline int32_t adm_cm_thresh_s_i_0_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3], int src_stride, int i)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta] + src_stride * (i - 1);
+        int16_t *flt_ptr = flt_angles[theta] + src_stride * (i - 1);
+        sum += flt_ptr[1] + flt_ptr[0] + flt_ptr[1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[1];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[0])) + 2048) >> 12);
+        sum += flt_ptr[1];
+        flt_ptr += src_stride;
+        sum += flt_ptr[1] + flt_ptr[0] + flt_ptr[1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar boundary threshold: i=1..h-2, j=w-1 */
+static inline int32_t adm_cm_thresh_s_i_wm1_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3], int src_stride, int w, int i)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta] + src_stride * (i - 1);
+        int16_t *flt_ptr = flt_angles[theta] + src_stride * (i - 1);
+        sum += flt_ptr[w - 2] + flt_ptr[w - 1] + flt_ptr[w - 1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[w - 2];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[w - 1])) + 2048) >> 12);
+        sum += flt_ptr[w - 1];
+        flt_ptr += src_stride;
+        sum += flt_ptr[w - 2] + flt_ptr[w - 1] + flt_ptr[w - 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar boundary threshold: i=h-1, j=0 */
+static inline int32_t adm_cm_thresh_s_hm1_0_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3], int src_stride, int h)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta] + src_stride * (h - 2);
+        int16_t *flt_ptr = flt_angles[theta] + src_stride * (h - 2);
+        sum += flt_ptr[1] + flt_ptr[0] + flt_ptr[1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[1];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[0])) + 2048) >> 12);
+        sum += flt_ptr[1];
+        sum += flt_ptr[1] + flt_ptr[0] + flt_ptr[1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar boundary threshold: i=h-1, j=1..w-2 */
+static inline int32_t adm_cm_thresh_s_hm1_j_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3], int src_stride, int h, int j)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta] + src_stride * (h - 2);
+        int16_t *flt_ptr = flt_angles[theta] + src_stride * (h - 2);
+        sum += flt_ptr[j - 1] + flt_ptr[j] + flt_ptr[j + 1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[j - 1];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[j])) + 2048) >> 12);
+        sum += flt_ptr[j + 1];
+        sum += flt_ptr[j - 1] + flt_ptr[j] + flt_ptr[j + 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar boundary threshold: i=h-1, j=w-1 */
+static inline int32_t adm_cm_thresh_s_hm1_wm1_scalar(
+    int16_t *angles[3], int16_t *flt_angles[3], int src_stride, int w, int h)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int16_t *src_ptr = angles[theta] + src_stride * (h - 2);
+        int16_t *flt_ptr = flt_angles[theta] + src_stride * (h - 2);
+        sum += flt_ptr[w - 2] + flt_ptr[w - 1] + flt_ptr[w - 1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[w - 2];
+        sum += (int16_t)(((ONE_BY_15 * abs((int32_t)src_ptr[w - 1])) + 2048) >> 12);
+        sum += flt_ptr[w - 1];
+        sum += flt_ptr[w - 2] + flt_ptr[w - 1] + flt_ptr[w - 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* Scalar accum_round for adm_cm (int16 path) */
+static inline void adm_cm_accum_round_scalar(
+    int32_t x, int32_t thr, int32_t shift_sub,
+    int32_t add_shift_sq, int32_t shift_sq,
+    int32_t add_shift_cub, uint32_t shift_cub,
+    int64_t *accum)
+{
+    x = abs(x) - ((int32_t)(thr) << shift_sub);
+    x = x < 0 ? 0 : x;
+    int32_t x_sq = (int32_t)((((int64_t)x * x) + add_shift_sq) >> shift_sq);
+    int64_t val = (((int64_t)x_sq * x) + add_shift_cub) >> shift_cub;
+    *accum += val;
+}
+
+/*
+ * AVX2 helper: accumulate cubed values for 8 int32 pixels.
+ * x_vec contains 8 int32 values already max(abs(x) - thr_shifted, 0).
+ * Computes x^2 >> shift_sq, then (x^2 >> shift_sq) * x >> shift_cub,
+ * and accumulates into accum (int64).
+ */
+static inline void adm_cm_accum_round_avx2_8(
+    __m256i x_vec, int32_t add_shift_sq, int32_t shift_sq,
+    int32_t add_shift_cub, uint32_t shift_cub, int64_t *accum)
+{
+    /* x_vec: 8 x int32 values, all non-negative */
+    __m256i add_sq = _mm256_set1_epi32(add_shift_sq);
+
+    /* Process low 4 and high 4 elements separately for int64 arithmetic */
+    __m128i x_lo128 = _mm256_castsi256_si128(x_vec);
+    __m128i x_hi128 = _mm256_extracti128_si256(x_vec, 1);
+
+    /* x_sq = ((int64)x * x + add) >> shift for low 4 elements */
+    /* _mm256_mul_epi32 multiplies elements 0,2,4,6 (even positions) producing 4 int64 results */
+    /* So we need two passes per 4 elements: even and odd */
+
+    /* Low 4 elements: x_lo128 contains elements [0,1,2,3] */
+    /* Even elements (0,2): */
+    __m256i x_lo256 = _mm256_cvtepi32_epi64(x_lo128);  /* 4 x int64 from low 4 */
+    __m256i x_hi256 = _mm256_cvtepi32_epi64(x_hi128);  /* 4 x int64 from high 4 */
+
+    __m256i add_sq64 = _mm256_set1_epi64x(add_shift_sq);
+    __m256i add_cub64 = _mm256_set1_epi64x(add_shift_cub);
+
+    /* x_sq_lo = (x_lo * x_lo + add_sq) >> shift_sq */
+    /* We need 64-bit multiply. Use _mm256_mul_epi32 which takes 32-bit inputs from even positions */
+    /* Since our values are in full 64-bit, and we know they fit in 32 bits, we can use mullo approach */
+    /* Actually x values fit in int32 (they are non-negative clipped values), so we can do: */
+    /* Recompute: x_sq per element using 64-bit math */
+
+    /* x_lo256 has 4 int64 values. We need x*x as int64. */
+    /* _mm256_mul_epi32 takes low 32 bits of each 64-bit lane and multiplies to give 64-bit results */
+    /* That's exactly what we want since x fits in 32 bits */
+    __m256i xsq_lo = _mm256_add_epi64(
+        _mm256_mul_epi32(x_lo256, x_lo256), add_sq64);
+    xsq_lo = _mm256_srli_epi64(xsq_lo, shift_sq);
+
+    __m256i xsq_hi = _mm256_add_epi64(
+        _mm256_mul_epi32(x_hi256, x_hi256), add_sq64);
+    xsq_hi = _mm256_srli_epi64(xsq_hi, shift_sq);
+
+    /* x_sq is now int32-ranged (shifted down). Truncate back to 32 bits for the cube step */
+    /* val = (x_sq * x + add_cub) >> shift_cub (result is int64) */
+    /* x_sq fits in int32, x fits in int32, product fits in int64 */
+    __m256i val_lo = _mm256_add_epi64(
+        _mm256_mul_epi32(xsq_lo, x_lo256), add_cub64);
+    /* Arithmetic right shift for int64 - use variable shift or manual */
+    /* Since shift_cub is small and values are non-negative, logical shift is fine */
+    val_lo = _mm256_srli_epi64(val_lo, shift_cub);
+
+    __m256i val_hi = _mm256_add_epi64(
+        _mm256_mul_epi32(xsq_hi, x_hi256), add_cub64);
+    val_hi = _mm256_srli_epi64(val_hi, shift_cub);
+
+    /* Horizontal sum of all 8 int64 values */
+    __m256i sum_8 = _mm256_add_epi64(val_lo, val_hi); /* 4 int64 */
+    __m128i sum_lo = _mm256_castsi256_si128(sum_8);
+    __m128i sum_hi = _mm256_extracti128_si256(sum_8, 1);
+    __m128i sum_4 = _mm_add_epi64(sum_lo, sum_hi);   /* 2 int64 */
+    __m128i sum_2 = _mm_add_epi64(sum_4, _mm_srli_si128(sum_4, 8)); /* 1 int64 */
+    *accum += _mm_cvtsi128_si64(sum_2);
+}
+
+/*
+ * Load 8 int16 values from ptr, sign-extend to 8 int32 in a __m256i.
+ */
+static inline __m256i load_i16_to_i32_8(const int16_t *ptr)
+{
+    __m128i v16 = _mm_loadu_si128((const __m128i *)ptr);
+    return _mm256_cvtepi16_epi32(v16);
+}
+
+/*
+ * Compute threshold for 8 pixels at positions j..j+7 (interior, int16 path).
+ * angles[3] and flt_angles[3] point to the h/v/d subbands of csf_a and csf_f.
+ * Returns __m256i with 8 int32 threshold values.
+ */
+static inline __m256i adm_cm_thresh_avx2_8(
+    int16_t *angles[3], int16_t *flt_angles[3],
+    int src_stride, int i, int j)
+{
+    __m256i thr = _mm256_setzero_si256();
+    __m256i v_one_by_15 = _mm256_set1_epi32(ONE_BY_15);
+    __m256i v_round = _mm256_set1_epi32(2048);
+
+    for (int theta = 0; theta < 3; ++theta) {
+        const int16_t *src_row = angles[theta] + src_stride * i;
+        const int16_t *flt_above = flt_angles[theta] + src_stride * (i - 1);
+        const int16_t *flt_center = flt_angles[theta] + src_stride * i;
+        const int16_t *flt_below = flt_angles[theta] + src_stride * (i + 1);
+
+        /* Row above: flt[i-1][j-1] + flt[i-1][j] + flt[i-1][j+1] */
+        __m256i a_l = load_i16_to_i32_8(flt_above + j - 1);
+        __m256i a_c = load_i16_to_i32_8(flt_above + j);
+        __m256i a_r = load_i16_to_i32_8(flt_above + j + 1);
+        __m256i row_above = _mm256_add_epi32(_mm256_add_epi32(a_l, a_c), a_r);
+
+        /* Center row: flt[i][j-1] + flt[i][j+1] + center_term */
+        __m256i c_l = load_i16_to_i32_8(flt_center + j - 1);
+        __m256i c_r = load_i16_to_i32_8(flt_center + j + 1);
+
+        /* Center term: (int16_t)(((ONE_BY_15 * abs(src[i][j])) + 2048) >> 12) */
+        __m256i src_c = load_i16_to_i32_8(src_row + j);
+        __m256i src_abs = _mm256_abs_epi32(src_c);
+        __m256i center_term = _mm256_srli_epi32(
+            _mm256_add_epi32(_mm256_mullo_epi32(v_one_by_15, src_abs), v_round), 12);
+        /* Truncate to int16 range to match scalar (int16_t) cast */
+        center_term = _mm256_slli_epi32(center_term, 16);
+        center_term = _mm256_srai_epi32(center_term, 16);
+
+        __m256i row_center = _mm256_add_epi32(_mm256_add_epi32(c_l, c_r), center_term);
+
+        /* Row below: flt[i+1][j-1] + flt[i+1][j] + flt[i+1][j+1] */
+        __m256i b_l = load_i16_to_i32_8(flt_below + j - 1);
+        __m256i b_c = load_i16_to_i32_8(flt_below + j);
+        __m256i b_r = load_i16_to_i32_8(flt_below + j + 1);
+        __m256i row_below = _mm256_add_epi32(_mm256_add_epi32(b_l, b_c), b_r);
+
+        __m256i theta_sum = _mm256_add_epi32(_mm256_add_epi32(row_above, row_center), row_below);
+        thr = _mm256_add_epi32(thr, theta_sum);
+    }
+    return thr;
+}
+
+float adm_cm_avx2(AdmBuffer *buf, int w, int h, int src_stride,
+                   int csf_a_stride,
+                   const float csf_factors[4][2],
+                   double adm_norm_view_dist, int adm_ref_display_height)
+{
+    const adm_dwt_band_t *src   = &buf->decouple_r;
+    const adm_dwt_band_t *csf_f = &buf->csf_f;
+    const adm_dwt_band_t *csf_a = &buf->csf_a;
+
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
+
+    uint16_t i_rfactor[3];
+    if (fabs(adm_norm_view_dist * adm_ref_display_height - DEFAULT_ADM_NORM_VIEW_DIST * DEFAULT_ADM_REF_DISPLAY_HEIGHT) < 1.0e-8) {
+        i_rfactor[0] = 36453;
+        i_rfactor[1] = 36453;
+        i_rfactor[2] = 49417;
+    } else {
+        const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
+        const double pow2_21 = pow(2, 21);
+        const double pow2_23 = pow(2, 23);
+        i_rfactor[0] = (uint16_t)(rfactor1[0] * pow2_21);
+        i_rfactor[1] = (uint16_t)(rfactor1[1] * pow2_21);
+        i_rfactor[2] = (uint16_t)(rfactor1[2] * pow2_23);
+    }
+
+    const int32_t shift_xhsq = 29, shift_xvsq = 29, shift_xdsq = 30;
+    const int32_t add_shift_xhsq = 268435456, add_shift_xvsq = 268435456, add_shift_xdsq = 536870912;
+
+    const uint32_t shift_xhcub = (uint32_t)ceil(log2(w) - 4);
+    const uint32_t add_shift_xhcub = (uint32_t)pow(2, (shift_xhcub - 1));
+    const uint32_t shift_xvcub = (uint32_t)ceil(log2(w) - 4);
+    const uint32_t add_shift_xvcub = (uint32_t)pow(2, (shift_xvcub - 1));
+    const uint32_t shift_xdcub = (uint32_t)ceil(log2(w) - 3);
+    const uint32_t add_shift_xdcub = (uint32_t)pow(2, (shift_xdcub - 1));
+
+    const uint32_t shift_inner_accum = (uint32_t)ceil(log2(h));
+    const uint32_t add_shift_inner_accum = (uint32_t)pow(2, (shift_inner_accum - 1));
+
+    const int32_t shift_xhsub = 10, shift_xvsub = 10, shift_xdsub = 12;
+
+    int16_t *angles[3] = { csf_a->band_h, csf_a->band_v, csf_a->band_d };
+    int16_t *flt_angles[3] = { csf_f->band_h, csf_f->band_v, csf_f->band_d };
+
+    int left = w * ADM_BORDER_FACTOR - 0.5;
+    int top = h * ADM_BORDER_FACTOR - 0.5;
+    int right = w - left;
+    int bottom = h - top;
+
+    const int start_col = (left > 1) ? left : 1;
+    const int end_col = (right < (w - 1)) ? right : (w - 1);
+    const int start_row = (top > 1) ? top : 1;
+    const int end_row = (bottom < (h - 1)) ? bottom : (h - 1);
+
+    int i, j;
+    int64_t accum_h = 0, accum_v = 0, accum_d = 0;
+    int64_t accum_inner_h = 0, accum_inner_v = 0, accum_inner_d = 0;
+
+    /* i=0 row (boundary) */
+    if (top <= 0) {
+        if (left <= 0) {
+            int32_t thr = adm_cm_thresh_s_0_0_scalar(angles, flt_angles, csf_a_stride);
+            int32_t xh = (int32_t)src->band_h[0] * i_rfactor[0];
+            int32_t xv = (int32_t)src->band_v[0] * i_rfactor[1];
+            int32_t xd = (int32_t)src->band_d[0] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+        for (j = start_col; j < end_col; ++j) {
+            int32_t thr = adm_cm_thresh_s_0_j_scalar(angles, flt_angles, csf_a_stride, j);
+            int32_t xh = src->band_h[j] * i_rfactor[0];
+            int32_t xv = src->band_v[j] * i_rfactor[1];
+            int32_t xd = src->band_d[j] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+        if (right > (w - 1)) {
+            int32_t thr = adm_cm_thresh_s_0_wm1_scalar(angles, flt_angles, csf_a_stride, w);
+            int32_t xh = src->band_h[w - 1] * i_rfactor[0];
+            int32_t xv = src->band_v[w - 1] * i_rfactor[1];
+            int32_t xd = src->band_d[w - 1] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+    }
+    accum_h += (accum_inner_h + add_shift_inner_accum) >> shift_inner_accum;
+    accum_v += (accum_inner_v + add_shift_inner_accum) >> shift_inner_accum;
+    accum_d += (accum_inner_d + add_shift_inner_accum) >> shift_inner_accum;
+
+    /* Interior rows: i = start_row..end_row-1 */
+    /* Determine if j=0 and/or j=w-1 boundaries are included */
+    const int do_left_boundary = (left <= 0);
+    const int do_right_boundary = (right > (w - 1));
+
+    /* AVX2 vectorized interior j-loop constants */
+    const __m256i v_rfactor_h = _mm256_set1_epi32((int32_t)i_rfactor[0]);
+    const __m256i v_rfactor_v = _mm256_set1_epi32((int32_t)i_rfactor[1]);
+    const __m256i v_rfactor_d = _mm256_set1_epi32((int32_t)i_rfactor[2]);
+    const __m256i v_zero = _mm256_setzero_si256();
+
+    for (i = start_row; i < end_row; ++i) {
+        const int i_offset = i * src_stride;
+        accum_inner_h = 0;
+        accum_inner_v = 0;
+        accum_inner_d = 0;
+
+        /* Left boundary scalar */
+        if (do_left_boundary) {
+            int32_t thr = adm_cm_thresh_s_i_0_scalar(angles, flt_angles, csf_a_stride, i);
+            int32_t xh = src->band_h[i_offset] * i_rfactor[0];
+            int32_t xv = src->band_v[i_offset] * i_rfactor[1];
+            int32_t xd = src->band_d[i_offset] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+
+        /* AVX2 vectorized interior j-loop: process 8 pixels at a time */
+        j = start_col;
+        for (; j + 8 <= end_col; j += 8) {
+            /* Compute threshold for 8 pixels */
+            __m256i thr_vec = adm_cm_thresh_avx2_8(angles, flt_angles, csf_a_stride, i, j);
+
+            /* Band H: x = src->band_h[i_offset + j] * i_rfactor[0] */
+            __m256i src_h = load_i16_to_i32_8(src->band_h + i_offset + j);
+            __m256i xh_vec = _mm256_mullo_epi32(src_h, v_rfactor_h);
+            /* abs(x) - (thr << shift_xhsub) */
+            __m256i xh_abs = _mm256_abs_epi32(xh_vec);
+            __m256i thr_shifted_h = _mm256_slli_epi32(thr_vec, shift_xhsub);
+            __m256i xh_sub = _mm256_sub_epi32(xh_abs, thr_shifted_h);
+            xh_sub = _mm256_max_epi32(xh_sub, v_zero);
+            adm_cm_accum_round_avx2_8(xh_sub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+
+            /* Band V */
+            __m256i src_v = load_i16_to_i32_8(src->band_v + i_offset + j);
+            __m256i xv_vec = _mm256_mullo_epi32(src_v, v_rfactor_v);
+            __m256i xv_abs = _mm256_abs_epi32(xv_vec);
+            __m256i thr_shifted_v = _mm256_slli_epi32(thr_vec, shift_xvsub);
+            __m256i xv_sub = _mm256_sub_epi32(xv_abs, thr_shifted_v);
+            xv_sub = _mm256_max_epi32(xv_sub, v_zero);
+            adm_cm_accum_round_avx2_8(xv_sub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+
+            /* Band D */
+            __m256i src_d = load_i16_to_i32_8(src->band_d + i_offset + j);
+            __m256i xd_vec = _mm256_mullo_epi32(src_d, v_rfactor_d);
+            __m256i xd_abs = _mm256_abs_epi32(xd_vec);
+            __m256i thr_shifted_d = _mm256_slli_epi32(thr_vec, shift_xdsub);
+            __m256i xd_sub = _mm256_sub_epi32(xd_abs, thr_shifted_d);
+            xd_sub = _mm256_max_epi32(xd_sub, v_zero);
+            adm_cm_accum_round_avx2_8(xd_sub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+
+        /* Scalar remainder for interior */
+        for (; j < end_col; ++j) {
+            int32_t thr = adm_cm_thresh_s_i_j_scalar(angles, flt_angles, csf_a_stride, i, j);
+            int32_t xh = src->band_h[i_offset + j] * i_rfactor[0];
+            int32_t xv = src->band_v[i_offset + j] * i_rfactor[1];
+            int32_t xd = src->band_d[i_offset + j] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+
+        /* Right boundary scalar */
+        if (do_right_boundary) {
+            int32_t thr = adm_cm_thresh_s_i_wm1_scalar(angles, flt_angles, csf_a_stride, w, i);
+            int32_t xh = src->band_h[i_offset + w - 1] * i_rfactor[0];
+            int32_t xv = src->band_v[i_offset + w - 1] * i_rfactor[1];
+            int32_t xd = src->band_d[i_offset + w - 1] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+
+        accum_h += (accum_inner_h + add_shift_inner_accum) >> shift_inner_accum;
+        accum_v += (accum_inner_v + add_shift_inner_accum) >> shift_inner_accum;
+        accum_d += (accum_inner_d + add_shift_inner_accum) >> shift_inner_accum;
+    }
+
+    /* i=h-1 row (boundary) */
+    accum_inner_h = 0;
+    accum_inner_v = 0;
+    accum_inner_d = 0;
+    if (bottom > (h - 1)) {
+        const int hm1_src_offset = (h - 1) * src_stride;
+        if (left <= 0) {
+            int32_t thr = adm_cm_thresh_s_hm1_0_scalar(angles, flt_angles, csf_a_stride, h);
+            int32_t xh = src->band_h[hm1_src_offset] * i_rfactor[0];
+            int32_t xv = src->band_v[hm1_src_offset] * i_rfactor[1];
+            int32_t xd = src->band_d[hm1_src_offset] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+        for (j = start_col; j < end_col; ++j) {
+            int32_t thr = adm_cm_thresh_s_hm1_j_scalar(angles, flt_angles, csf_a_stride, h, j);
+            int32_t xh = src->band_h[hm1_src_offset + j] * i_rfactor[0];
+            int32_t xv = src->band_v[hm1_src_offset + j] * i_rfactor[1];
+            int32_t xd = src->band_d[hm1_src_offset + j] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+        if (right > (w - 1)) {
+            int32_t thr = adm_cm_thresh_s_hm1_wm1_scalar(angles, flt_angles, csf_a_stride, w, h);
+            int32_t xh = src->band_h[hm1_src_offset + w - 1] * i_rfactor[0];
+            int32_t xv = src->band_v[hm1_src_offset + w - 1] * i_rfactor[1];
+            int32_t xd = src->band_d[hm1_src_offset + w - 1] * i_rfactor[2];
+            adm_cm_accum_round_scalar(xh, thr, shift_xhsub, add_shift_xhsq, shift_xhsq, add_shift_xhcub, shift_xhcub, &accum_inner_h);
+            adm_cm_accum_round_scalar(xv, thr, shift_xvsub, add_shift_xvsq, shift_xvsq, add_shift_xvcub, shift_xvcub, &accum_inner_v);
+            adm_cm_accum_round_scalar(xd, thr, shift_xdsub, add_shift_xdsq, shift_xdsq, add_shift_xdcub, shift_xdcub, &accum_inner_d);
+        }
+    }
+    accum_h += (accum_inner_h + add_shift_inner_accum) >> shift_inner_accum;
+    accum_v += (accum_inner_v + add_shift_inner_accum) >> shift_inner_accum;
+    accum_d += (accum_inner_d + add_shift_inner_accum) >> shift_inner_accum;
+
+    float f_accum_h = (float)(accum_h / pow(2, (52 - shift_xhcub - shift_inner_accum)));
+    float f_accum_v = (float)(accum_v / pow(2, (52 - shift_xvcub - shift_inner_accum)));
+    float f_accum_d = (float)(accum_d / pow(2, (57 - shift_xdcub - shift_inner_accum)));
+
+    const float powf_add = powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
+    float num_scale_h = powf(f_accum_h, 1.0f / 3.0f) + powf_add;
+    float num_scale_v = powf(f_accum_v, 1.0f / 3.0f) + powf_add;
+    float num_scale_d = powf(f_accum_d, 1.0f / 3.0f) + powf_add;
+
+    return (num_scale_h + num_scale_v + num_scale_d);
+}
+
+/* ================================================================
+ * i4 (int32) path scalar helpers for boundary pixels
+ * ================================================================ */
+static inline int32_t i4_adm_cm_thresh_s_i_j_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3],
+    int src_stride, int i, int j,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta] + src_stride * (i - 1);
+        int32_t *flt_ptr = flt_angles[theta] + src_stride * (i - 1);
+        sum += flt_ptr[j - 1] + flt_ptr[j] + flt_ptr[j + 1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[j - 1] + flt_ptr[j + 1];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[j])) + add_bef_shift) >> shift);
+        flt_ptr += src_stride;
+        sum += flt_ptr[j - 1] + flt_ptr[j] + flt_ptr[j + 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+static inline int32_t i4_adm_cm_thresh_s_0_0_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3], int src_stride,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta];
+        int32_t *flt_ptr = flt_angles[theta];
+        sum += flt_ptr[src_stride + 1] + flt_ptr[src_stride] + flt_ptr[src_stride + 1];
+        sum += flt_ptr[1];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[0])) + add_bef_shift) >> shift);
+        sum += flt_ptr[1];
+        sum += flt_ptr[src_stride + 1] + flt_ptr[src_stride] + flt_ptr[src_stride + 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+static inline int32_t i4_adm_cm_thresh_s_0_j_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3], int src_stride, int j,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta];
+        int32_t *flt_ptr = flt_angles[theta];
+        sum += flt_ptr[src_stride + j - 1] + flt_ptr[src_stride + j] + flt_ptr[src_stride + j + 1];
+        sum += flt_ptr[j - 1];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[j])) + add_bef_shift) >> shift);
+        sum += flt_ptr[j + 1];
+        sum += flt_ptr[src_stride + j - 1] + flt_ptr[src_stride + j] + flt_ptr[src_stride + j + 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+static inline int32_t i4_adm_cm_thresh_s_0_wm1_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3], int src_stride, int w,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta];
+        int32_t *flt_ptr = flt_angles[theta];
+        sum += flt_ptr[src_stride + w - 2] + flt_ptr[src_stride + w - 1] + flt_ptr[src_stride + w - 1];
+        sum += flt_ptr[w - 2];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[w - 1])) + add_bef_shift) >> shift);
+        sum += flt_ptr[w - 1];
+        sum += flt_ptr[src_stride + w - 2] + flt_ptr[src_stride + w - 1] + flt_ptr[src_stride + w - 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+static inline int32_t i4_adm_cm_thresh_s_i_0_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3], int src_stride, int i,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta] + src_stride * (i - 1);
+        int32_t *flt_ptr = flt_angles[theta] + src_stride * (i - 1);
+        sum += flt_ptr[1] + flt_ptr[0] + flt_ptr[1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[1];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[0])) + add_bef_shift) >> shift);
+        sum += flt_ptr[1];
+        flt_ptr += src_stride;
+        sum += flt_ptr[1] + flt_ptr[0] + flt_ptr[1];
+        accum += sum;
+    }
+    return accum;
+}
+
+static inline int32_t i4_adm_cm_thresh_s_i_wm1_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3], int src_stride, int w, int i,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta] + src_stride * (i - 1);
+        int32_t *flt_ptr = flt_angles[theta] + src_stride * (i - 1);
+        sum += flt_ptr[w - 2] + flt_ptr[w - 1] + flt_ptr[w - 1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[w - 2];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[w - 1])) + add_bef_shift) >> shift);
+        sum += flt_ptr[w - 1];
+        flt_ptr += src_stride;
+        sum += flt_ptr[w - 2] + flt_ptr[w - 1] + flt_ptr[w - 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+static inline int32_t i4_adm_cm_thresh_s_hm1_0_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3], int src_stride, int h,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta] + src_stride * (h - 2);
+        int32_t *flt_ptr = flt_angles[theta] + src_stride * (h - 2);
+        sum += flt_ptr[1] + flt_ptr[0] + flt_ptr[1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[1];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[0])) + add_bef_shift) >> shift);
+        sum += flt_ptr[1];
+        sum += flt_ptr[1] + flt_ptr[0] + flt_ptr[1];
+        accum += sum;
+    }
+    return accum;
+}
+
+static inline int32_t i4_adm_cm_thresh_s_hm1_j_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3], int src_stride, int h, int j,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta] + src_stride * (h - 2);
+        int32_t *flt_ptr = flt_angles[theta] + src_stride * (h - 2);
+        sum += flt_ptr[j - 1] + flt_ptr[j] + flt_ptr[j + 1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[j - 1];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[j])) + add_bef_shift) >> shift);
+        sum += flt_ptr[j + 1];
+        sum += flt_ptr[j - 1] + flt_ptr[j] + flt_ptr[j + 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+static inline int32_t i4_adm_cm_thresh_s_hm1_wm1_scalar(
+    int32_t *angles[3], int32_t *flt_angles[3], int src_stride, int w, int h,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    int32_t accum = 0;
+    for (int theta = 0; theta < 3; ++theta) {
+        int32_t sum = 0;
+        int32_t *src_ptr = angles[theta] + src_stride * (h - 2);
+        int32_t *flt_ptr = flt_angles[theta] + src_stride * (h - 2);
+        sum += flt_ptr[w - 2] + flt_ptr[w - 1] + flt_ptr[w - 1];
+        src_ptr += src_stride; flt_ptr += src_stride;
+        sum += flt_ptr[w - 2];
+        sum += (int32_t)((((int64_t)I4_ONE_BY_15 * abs(src_ptr[w - 1])) + add_bef_shift) >> shift);
+        sum += flt_ptr[w - 1];
+        sum += flt_ptr[w - 2] + flt_ptr[w - 1] + flt_ptr[w - 1];
+        accum += sum;
+    }
+    return accum;
+}
+
+/* i4 scalar accum_round (int32 path): x = abs(x) - (thr >> shift_sub) */
+static inline void i4_adm_cm_accum_round_scalar(
+    int32_t x, int32_t thr, int32_t shift_sub,
+    int32_t add_shift_sq, int32_t shift_sq,
+    int32_t add_shift_cub, uint32_t shift_cub,
+    int64_t *accum)
+{
+    x = abs(x) - (thr >> shift_sub);
+    x = x < 0 ? 0 : x;
+    int32_t x_sq = (int32_t)((((int64_t)x * x) + add_shift_sq) >> shift_sq);
+    int64_t val = (((int64_t)x_sq * x) + add_shift_cub) >> shift_cub;
+    *accum += val;
+}
+
+/*
+ * AVX2 helper: compute threshold for 8 int32 pixels in i4 path.
+ */
+static inline __m256i i4_adm_cm_thresh_avx2_8(
+    int32_t *angles[3], int32_t *flt_angles[3],
+    int src_stride, int i, int j,
+    int32_t add_bef_shift, uint32_t shift)
+{
+    __m256i thr = _mm256_setzero_si256();
+    __m256i v_add = _mm256_set1_epi64x(add_bef_shift);
+
+    for (int theta = 0; theta < 3; ++theta) {
+        const int32_t *src_row = angles[theta] + src_stride * i;
+        const int32_t *flt_above = flt_angles[theta] + src_stride * (i - 1);
+        const int32_t *flt_center = flt_angles[theta] + src_stride * i;
+        const int32_t *flt_below = flt_angles[theta] + src_stride * (i + 1);
+
+        /* Row above: flt[i-1][j-1] + flt[i-1][j] + flt[i-1][j+1] */
+        __m256i a_l = _mm256_loadu_si256((const __m256i *)(flt_above + j - 1));
+        __m256i a_c = _mm256_loadu_si256((const __m256i *)(flt_above + j));
+        __m256i a_r = _mm256_loadu_si256((const __m256i *)(flt_above + j + 1));
+        __m256i row_above = _mm256_add_epi32(_mm256_add_epi32(a_l, a_c), a_r);
+
+        /* Center row: flt[i][j-1] + flt[i][j+1] + center_term */
+        __m256i c_l = _mm256_loadu_si256((const __m256i *)(flt_center + j - 1));
+        __m256i c_r = _mm256_loadu_si256((const __m256i *)(flt_center + j + 1));
+
+        /* Center term: (int32_t)(((int64_t)I4_ONE_BY_15 * abs(src[j])) + add) >> shift */
+        __m256i src_c = _mm256_loadu_si256((const __m256i *)(src_row + j));
+        __m256i src_abs = _mm256_abs_epi32(src_c);
+        /* Need 64-bit multiply: I4_ONE_BY_15 * abs(src) */
+        /* Process elements 0,2,4,6 and 1,3,5,7 separately */
+        __m256i v_one_by_15 = _mm256_set1_epi64x(I4_ONE_BY_15);
+        /* Even elements: already in low 32 bits of each 64-bit lane after appropriate shuffle */
+        __m256i src_abs_even = _mm256_and_si256(src_abs, _mm256_set1_epi64x(0xFFFFFFFF));
+        __m256i prod_even = _mm256_mul_epi32(src_abs_even, v_one_by_15);
+        __m256i ct_even = _mm256_srli_epi64(_mm256_add_epi64(prod_even, v_add), shift);
+
+        /* Odd elements: shift right by 32 bits to position them */
+        __m256i src_abs_odd = _mm256_srli_epi64(src_abs, 32);
+        __m256i v_one_by_15_32 = _mm256_set1_epi32(I4_ONE_BY_15);
+        __m256i prod_odd = _mm256_mul_epi32(src_abs_odd, v_one_by_15);
+        __m256i ct_odd = _mm256_srli_epi64(_mm256_add_epi64(prod_odd, v_add), shift);
+
+        /* Recombine: even results in low 32 of each 64-bit, odd in low 32 of each 64-bit */
+        /* Pack back to 8 x int32 */
+        /* ct_even has results at positions 0,_,2,_,4,_,6,_ (as 64-bit in low 32) */
+        /* ct_odd has results at positions 1,_,3,_,5,_,7,_ (as 64-bit in low 32) */
+        /* Shift odd left by 32, then OR */
+        __m256i ct_odd_shifted = _mm256_slli_epi64(ct_odd, 32);
+        __m256i center_term = _mm256_or_si256(
+            _mm256_and_si256(ct_even, _mm256_set1_epi64x(0xFFFFFFFF)),
+            ct_odd_shifted);
+
+        __m256i row_center = _mm256_add_epi32(_mm256_add_epi32(c_l, c_r), center_term);
+
+        /* Row below */
+        __m256i b_l = _mm256_loadu_si256((const __m256i *)(flt_below + j - 1));
+        __m256i b_c = _mm256_loadu_si256((const __m256i *)(flt_below + j));
+        __m256i b_r = _mm256_loadu_si256((const __m256i *)(flt_below + j + 1));
+        __m256i row_below = _mm256_add_epi32(_mm256_add_epi32(b_l, b_c), b_r);
+
+        __m256i theta_sum = _mm256_add_epi32(_mm256_add_epi32(row_above, row_center), row_below);
+        thr = _mm256_add_epi32(thr, theta_sum);
+    }
+    return thr;
+}
+
+/*
+ * i4 AVX2 accumulation: process 8 int32 pixels, accumulate cubed values.
+ * For i4 path: I4_ADM_CM_ACCUM_ROUND with shift_sub=0 (thr >> 0 = thr).
+ */
+static inline void i4_adm_cm_accum_round_avx2_8(
+    __m256i x_vec, __m256i thr_vec,
+    int32_t add_shift_sq, int32_t shift_sq,
+    int32_t add_shift_cub, uint32_t shift_cub, int64_t *accum)
+{
+    __m256i v_zero = _mm256_setzero_si256();
+    /* x = abs(x) - thr; x = max(x, 0) -- shift_sub is 0 for i4 */
+    __m256i x_abs = _mm256_abs_epi32(x_vec);
+    __m256i x_sub = _mm256_sub_epi32(x_abs, thr_vec);
+    x_sub = _mm256_max_epi32(x_sub, v_zero);
+
+    /* Process in two halves of 4 elements each for int64 precision */
+    __m128i x_lo128 = _mm256_castsi256_si128(x_sub);
+    __m128i x_hi128 = _mm256_extracti128_si256(x_sub, 1);
+    __m256i x_lo = _mm256_cvtepi32_epi64(x_lo128);
+    __m256i x_hi = _mm256_cvtepi32_epi64(x_hi128);
+
+    __m256i add_sq64 = _mm256_set1_epi64x(add_shift_sq);
+    __m256i add_cub64 = _mm256_set1_epi64x(add_shift_cub);
+
+    /* x_sq = ((int64)x * x + add_sq) >> shift_sq */
+    __m256i xsq_lo = _mm256_srli_epi64(
+        _mm256_add_epi64(_mm256_mul_epi32(x_lo, x_lo), add_sq64), shift_sq);
+    __m256i xsq_hi = _mm256_srli_epi64(
+        _mm256_add_epi64(_mm256_mul_epi32(x_hi, x_hi), add_sq64), shift_sq);
+
+    /* val = (x_sq * x + add_cub) >> shift_cub */
+    __m256i val_lo = _mm256_srli_epi64(
+        _mm256_add_epi64(_mm256_mul_epi32(xsq_lo, x_lo), add_cub64), shift_cub);
+    __m256i val_hi = _mm256_srli_epi64(
+        _mm256_add_epi64(_mm256_mul_epi32(xsq_hi, x_hi), add_cub64), shift_cub);
+
+    /* Horizontal sum of 8 int64 values */
+    __m256i sum_8 = _mm256_add_epi64(val_lo, val_hi);
+    __m128i sum_lo = _mm256_castsi256_si128(sum_8);
+    __m128i sum_hi = _mm256_extracti128_si256(sum_8, 1);
+    __m128i sum_4 = _mm_add_epi64(sum_lo, sum_hi);
+    __m128i sum_2 = _mm_add_epi64(sum_4, _mm_srli_si128(sum_4, 8));
+    *accum += _mm_cvtsi128_si64(sum_2);
+}
+
+float i4_adm_cm_avx2(AdmBuffer *buf, int w, int h, int src_stride,
+                      int csf_a_stride, int scale,
+                      const float csf_factors[4][2])
+{
+    const i4_adm_dwt_band_t *src = &buf->i4_decouple_r;
+    const i4_adm_dwt_band_t *csf_f = &buf->i4_csf_f;
+    const i4_adm_dwt_band_t *csf_a = &buf->i4_csf_a;
+
+    float factor1 = csf_factors[scale][0];
+    float factor2 = csf_factors[scale][1];
+    float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
+
+    const uint32_t rfactor[3] = { (uint32_t)(rfactor1[0] * pow(2, 32)),
+                                  (uint32_t)(rfactor1[1] * pow(2, 32)),
+                                  (uint32_t)(rfactor1[2] * pow(2, 32)) };
+
+    const uint32_t shift_dst[3] = { 28, 28, 28 };
+    const uint32_t shift_flt[3] = { 32, 32, 32 };
+    int32_t add_bef_shift_dst[3], add_bef_shift_flt[3];
+    for (unsigned idx = 0; idx < 3; ++idx) {
+        add_bef_shift_dst[idx] = (1u << (shift_dst[idx] - 1));
+        add_bef_shift_flt[idx] = (1u << (shift_flt[idx] - 1));
+    }
+
+    uint32_t shift_cub = (uint32_t)ceil(log2(w));
+    uint32_t add_shift_cub = (uint32_t)pow(2, (shift_cub - 1));
+    uint32_t shift_inner_accum = (uint32_t)ceil(log2(h));
+    uint32_t add_shift_inner_accum = (uint32_t)pow(2, (shift_inner_accum - 1));
+
+    float final_shift[3] = { (float)pow(2,(45 - shift_cub - shift_inner_accum)),
+                             (float)pow(2,(39 - shift_cub - shift_inner_accum)),
+                             (float)pow(2,(36 - shift_cub - shift_inner_accum)) };
+
+    const int32_t shift_sq = 30;
+    const int32_t add_shift_sq = 536870912;
+    const int32_t shift_sub = 0;
+
+    int32_t *angles[3] = { csf_a->band_h, csf_a->band_v, csf_a->band_d };
+    int32_t *flt_angles[3] = { csf_f->band_h, csf_f->band_v, csf_f->band_d };
+
+    const int left = w * ADM_BORDER_FACTOR - 0.5;
+    const int top = h * ADM_BORDER_FACTOR - 0.5;
+    const int right = w - left;
+    const int bottom = h - top;
+
+    const int start_col = (left > 1) ? left : 1;
+    const int end_col = (right < (w - 1)) ? right : (w - 1);
+    const int start_row = (top > 1) ? top : 1;
+    const int end_row = (bottom < (h - 1)) ? bottom : (h - 1);
+
+    const int scale_idx = scale - 1;
+    const int32_t add_bef_shift_dst_s = add_bef_shift_dst[scale_idx];
+    const uint32_t shift_dst_s = shift_dst[scale_idx];
+    const int32_t add_bef_shift_flt_s = add_bef_shift_flt[scale_idx];
+    const uint32_t shift_flt_s = shift_flt[scale_idx];
+
+    int i, j;
+    int64_t accum_h = 0, accum_v = 0, accum_d = 0;
+    int64_t accum_inner_h = 0, accum_inner_v = 0, accum_inner_d = 0;
+
+    /* i=0 row */
+    if (top <= 0) {
+        if (left <= 0) {
+            int32_t thr = i4_adm_cm_thresh_s_0_0_scalar(angles, flt_angles, csf_a_stride,
+                                                         add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[0] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[0] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[0] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+        for (j = start_col; j < end_col; ++j) {
+            int32_t thr = i4_adm_cm_thresh_s_0_j_scalar(angles, flt_angles, csf_a_stride, j,
+                                                         add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[j] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[j] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[j] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+        if (right > (w - 1)) {
+            int32_t thr = i4_adm_cm_thresh_s_0_wm1_scalar(angles, flt_angles, csf_a_stride, w,
+                                                           add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[w - 1] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[w - 1] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[w - 1] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+    }
+    accum_h += (accum_inner_h + add_shift_inner_accum) >> shift_inner_accum;
+    accum_v += (accum_inner_v + add_shift_inner_accum) >> shift_inner_accum;
+    accum_d += (accum_inner_d + add_shift_inner_accum) >> shift_inner_accum;
+
+    /* Interior rows */
+    const int do_left_boundary = (left <= 0);
+    const int do_right_boundary = (right > (w - 1));
+
+    for (i = start_row; i < end_row; ++i) {
+        const int i_offset = i * src_stride;
+        accum_inner_h = 0;
+        accum_inner_v = 0;
+        accum_inner_d = 0;
+
+        if (do_left_boundary) {
+            int32_t thr = i4_adm_cm_thresh_s_i_0_scalar(angles, flt_angles, csf_a_stride, i,
+                                                         add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[i_offset] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[i_offset] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[i_offset] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+
+        /* AVX2 interior j-loop: 8 int32 pixels at a time */
+        j = start_col;
+        for (; j + 8 <= end_col; j += 8) {
+            __m256i thr_vec = i4_adm_cm_thresh_avx2_8(angles, flt_angles, csf_a_stride, i, j,
+                                                       add_bef_shift_flt_s, shift_flt_s);
+
+            /* For each band: x = (int32_t)(((int64_t)src * rfactor + add) >> shift_dst)
+             * Then do the accum_round with shift_sub=0, so threshold is thr directly.
+             */
+            /* Band H: compute x = (src * rfactor + add) >> shift scalar, then vectorize accum */
+            {
+                int32_t x_arr[8];
+                for (int k = 0; k < 8; ++k) {
+                    x_arr[k] = (int32_t)((((int64_t)src->band_h[i_offset + j + k] * rfactor[0]) +
+                                           add_bef_shift_dst_s) >> shift_dst_s);
+                }
+                __m256i x_h = _mm256_loadu_si256((const __m256i *)x_arr);
+                i4_adm_cm_accum_round_avx2_8(x_h, thr_vec, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            }
+
+            /* Band V */
+            {
+                int32_t x_arr[8];
+                for (int k = 0; k < 8; ++k) {
+                    x_arr[k] = (int32_t)((((int64_t)src->band_v[i_offset + j + k] * rfactor[1]) +
+                                           add_bef_shift_dst_s) >> shift_dst_s);
+                }
+                __m256i x_v = _mm256_loadu_si256((const __m256i *)x_arr);
+                i4_adm_cm_accum_round_avx2_8(x_v, thr_vec, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            }
+
+            /* Band D */
+            {
+                int32_t x_arr[8];
+                for (int k = 0; k < 8; ++k) {
+                    x_arr[k] = (int32_t)((((int64_t)src->band_d[i_offset + j + k] * rfactor[2]) +
+                                           add_bef_shift_dst_s) >> shift_dst_s);
+                }
+                __m256i x_d = _mm256_loadu_si256((const __m256i *)x_arr);
+                i4_adm_cm_accum_round_avx2_8(x_d, thr_vec, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+            }
+        }
+
+        /* Scalar remainder */
+        for (; j < end_col; ++j) {
+            int32_t thr = i4_adm_cm_thresh_s_i_j_scalar(angles, flt_angles, csf_a_stride, i, j,
+                                                         add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[i_offset + j] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[i_offset + j] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[i_offset + j] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+
+        if (do_right_boundary) {
+            int32_t thr = i4_adm_cm_thresh_s_i_wm1_scalar(angles, flt_angles, csf_a_stride, w, i,
+                                                           add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[i_offset + w - 1] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[i_offset + w - 1] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[i_offset + w - 1] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+
+        accum_h += (accum_inner_h + add_shift_inner_accum) >> shift_inner_accum;
+        accum_v += (accum_inner_v + add_shift_inner_accum) >> shift_inner_accum;
+        accum_d += (accum_inner_d + add_shift_inner_accum) >> shift_inner_accum;
+    }
+
+    /* i=h-1 row */
+    accum_inner_h = 0;
+    accum_inner_v = 0;
+    accum_inner_d = 0;
+    if (bottom > (h - 1)) {
+        const int hm1_offset = (h - 1) * src_stride;
+        if (left <= 0) {
+            int32_t thr = i4_adm_cm_thresh_s_hm1_0_scalar(angles, flt_angles, csf_a_stride, h,
+                                                           add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[hm1_offset] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[hm1_offset] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[hm1_offset] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+        for (j = start_col; j < end_col; ++j) {
+            int32_t thr = i4_adm_cm_thresh_s_hm1_j_scalar(angles, flt_angles, csf_a_stride, h, j,
+                                                           add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[hm1_offset + j] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[hm1_offset + j] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[hm1_offset + j] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+        if (right > (w - 1)) {
+            int32_t thr = i4_adm_cm_thresh_s_hm1_wm1_scalar(angles, flt_angles, csf_a_stride, w, h,
+                                                             add_bef_shift_flt_s, shift_flt_s);
+            int32_t xh = (int32_t)((((int64_t)src->band_h[hm1_offset + w - 1] * rfactor[0]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xv = (int32_t)((((int64_t)src->band_v[hm1_offset + w - 1] * rfactor[1]) + add_bef_shift_dst_s) >> shift_dst_s);
+            int32_t xd = (int32_t)((((int64_t)src->band_d[hm1_offset + w - 1] * rfactor[2]) + add_bef_shift_dst_s) >> shift_dst_s);
+            i4_adm_cm_accum_round_scalar(xh, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_h);
+            i4_adm_cm_accum_round_scalar(xv, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_v);
+            i4_adm_cm_accum_round_scalar(xd, thr, shift_sub, add_shift_sq, shift_sq, add_shift_cub, shift_cub, &accum_inner_d);
+        }
+    }
+    accum_h += (accum_inner_h + add_shift_inner_accum) >> shift_inner_accum;
+    accum_v += (accum_inner_v + add_shift_inner_accum) >> shift_inner_accum;
+    accum_d += (accum_inner_d + add_shift_inner_accum) >> shift_inner_accum;
+
+    float f_accum_h = (float)(accum_h / final_shift[scale_idx]);
+    float f_accum_v = (float)(accum_v / final_shift[scale_idx]);
+    float f_accum_d = (float)(accum_d / final_shift[scale_idx]);
+
+    const float powf_add = powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
+    float num_scale_h = powf(f_accum_h, 1.0f / 3.0f) + powf_add;
+    float num_scale_v = powf(f_accum_v, 1.0f / 3.0f) + powf_add;
+    float num_scale_d = powf(f_accum_d, 1.0f / 3.0f) + powf_add;
+
+    return (num_scale_h + num_scale_v + num_scale_d);
 }

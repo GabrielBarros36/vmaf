@@ -54,6 +54,8 @@ typedef struct AdmState {
     void (*adm_csf_func)(AdmBuffer *buf, int w, int h, int stride,
                          uint16_t i_rfactor[3], uint8_t i_shifts[3],
                          uint16_t i_shiftsadd[3]);
+    adm_cm_fn adm_cm_func;
+    i4_adm_cm_fn i4_adm_cm_func;
     VmafDictionary *feature_name_dict;
 } AdmState;
 
@@ -2697,7 +2699,7 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			adm_csf(buf, w, h, buf_stride, csf_factors,
                     adm_norm_view_dist, adm_ref_display_height, s->adm_csf_func);
 
-			num_scale = adm_cm(buf, w, h, buf_stride, buf_stride,
+			num_scale = s->adm_cm_func(buf, w, h, buf_stride, buf_stride,
                                csf_factors,
                                adm_norm_view_dist, adm_ref_display_height);
 		}
@@ -2721,7 +2723,7 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			i4_adm_csf(buf, scale, w, h, buf_stride,
               csf_factors);
 
-			num_scale = i4_adm_cm(buf, w, h, buf_stride, buf_stride, scale,
+			num_scale = s->i4_adm_cm_func(buf, w, h, buf_stride, buf_stride, scale,
                          csf_factors);
 		}
 		else {
@@ -2740,7 +2742,7 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			i4_adm_csf(buf, scale, w, h, buf_stride,
               csf_factors);
 
-			num_scale = i4_adm_cm(buf, w, h, buf_stride, buf_stride, scale,
+			num_scale = s->i4_adm_cm_func(buf, w, h, buf_stride, buf_stride, scale,
                          csf_factors);
 		}
 
@@ -2834,6 +2836,8 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     s->dwt2_8 = adm_dwt2_8;
     s->adm_decouple = adm_decouple;
     s->adm_csf_func = adm_csf_inner;
+    s->adm_cm_func = adm_cm;
+    s->i4_adm_cm_func = i4_adm_cm;
 
 #if ARCH_X86
     unsigned flags = vmaf_get_cpu_flags();
@@ -2841,6 +2845,8 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
         if (!(w % 8)) s->dwt2_8 = adm_dwt2_8_avx2;
         s->adm_decouple = adm_decouple_avx2;
         s->adm_csf_func = adm_csf_avx2;
+        s->adm_cm_func = adm_cm_avx2;
+        s->i4_adm_cm_func = i4_adm_cm_avx2;
     }
 #elif ARCH_AARCH64
     unsigned flags = vmaf_get_cpu_flags();

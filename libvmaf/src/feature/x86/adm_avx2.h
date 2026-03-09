@@ -33,4 +33,13 @@ void adm_csf_avx2(AdmBuffer *buf, int w, int h, int stride,
                   uint16_t i_rfactor[3], uint8_t i_shifts[3],
                   uint16_t i_shiftsadd[3]);
 
+float adm_cm_avx2(AdmBuffer *buf, int w, int h, int src_stride,
+                   int csf_a_stride,
+                   const float csf_factors[4][2],
+                   double adm_norm_view_dist, int adm_ref_display_height);
+
+float i4_adm_cm_avx2(AdmBuffer *buf, int w, int h, int src_stride,
+                      int csf_a_stride, int scale,
+                      const float csf_factors[4][2]);
+
 #endif /* X86_AVX2_ADM_H_ */
