@@ -1414,6 +1414,14 @@ void vif_subsample_rd_16_avx2(VifBuffer buf, unsigned w, unsigned h, int scale,
         shift_VP = 16;
     }
 
+    /* Pre-broadcast all filter coefficients (max fwidth = 9 for subsample) */
+    __m256i vif_coeffs[9];
+    for (unsigned fi = 0; fi < fwidth; ++fi) {
+        vif_coeffs[fi] = _mm256_set1_epi16(vif_filt[fi]);
+    }
+    __m256i addnum_vp = _mm256_set1_epi32(add_shift_round_VP);
+    __m256i addnum_hp = _mm256_set1_epi32(32768);
+
     for (unsigned i = 0; i < h / 2; i++) {
         // VERTICAL
 
@@ -1426,7 +1434,7 @@ void vif_subsample_rd_16_avx2(VifBuffer buf, unsigned w, unsigned h, int scale,
             accumr_lo = accumr_hi = accumd_lo = accumd_hi = rmul1 = rmul2 =
                 dmul1 = dmul2 = _mm256_setzero_si256();
             for (unsigned fi = 0; fi < fwidth; ++fi, ii_check = ii + fi) {
-                __m256i f1 = _mm256_set1_epi16(vif_filt[fi]);
+                __m256i f1 = vif_coeffs[fi];
                 __m256i ref1 = _mm256_loadu_si256(
                     (__m256i *)(ref + (ii_check * stride) + j));
                 __m256i dis1 = _mm256_loadu_si256(
@@ -1445,9 +1453,8 @@ void vif_subsample_rd_16_avx2(VifBuffer buf, unsigned w, unsigned h, int scale,
                 accumd_lo = _mm256_add_epi32(accumd_lo, dmul1);
                 accumd_hi = _mm256_add_epi32(accumd_hi, dmul2);
             }
-            __m256i addnum = _mm256_set1_epi32(add_shift_round_VP);
-            accumr_lo = _mm256_add_epi32(accumr_lo, addnum);
-            accumr_hi = _mm256_add_epi32(accumr_hi, addnum);
+            accumr_lo = _mm256_add_epi32(accumr_lo, addnum_vp);
+            accumr_hi = _mm256_add_epi32(accumr_hi, addnum_vp);
             accumr_lo = _mm256_srli_epi32(accumr_lo, shift_VP);
             accumr_hi = _mm256_srli_epi32(accumr_hi, shift_VP);
 
@@ -1460,8 +1467,8 @@ void vif_subsample_rd_16_avx2(VifBuffer buf, unsigned w, unsigned h, int scale,
             _mm256_storeu_si256((__m256i *)(buf.tmp.ref_convol + j + 8),
                                 accumu2_hi);
 
-            accumd_lo = _mm256_add_epi32(accumd_lo, addnum);
-            accumd_hi = _mm256_add_epi32(accumd_hi, addnum);
+            accumd_lo = _mm256_add_epi32(accumd_lo, addnum_vp);
+            accumd_hi = _mm256_add_epi32(accumd_hi, addnum_vp);
             accumd_lo = _mm256_srli_epi32(accumd_lo, shift_VP);
             accumd_hi = _mm256_srli_epi32(accumd_hi, shift_VP);
             accumu2_lo = _mm256_permute2x128_si256(accumd_lo, accumd_hi, 0x20);
@@ -1500,7 +1507,7 @@ void vif_subsample_rd_16_avx2(VifBuffer buf, unsigned w, unsigned h, int scale,
             for (unsigned fj = 0; fj < fwidth; ++fj, jj_check = jj + fj) {
                 __m256i refconvol = _mm256_loadu_si256(
                     (__m256i *)(buf.tmp.ref_convol + jj_check));
-                __m256i fcoeff = _mm256_set1_epi16(vif_filt[fj]);
+                __m256i fcoeff = vif_coeffs[fj];
                 __m256i result2 = _mm256_mulhi_epu16(refconvol, fcoeff);
                 __m256i result2lo = _mm256_mullo_epi16(refconvol, fcoeff);
                 accumrlo = _mm256_add_epi32(
@@ -1517,11 +1524,10 @@ void vif_subsample_rd_16_avx2(VifBuffer buf, unsigned w, unsigned h, int scale,
                     accumdhi, _mm256_unpackhi_epi16(result2lo, result2));
             }
 
-            __m256i addnum = _mm256_set1_epi32(32768);
-            accumdlo = _mm256_add_epi32(accumdlo, addnum);
-            accumdhi = _mm256_add_epi32(accumdhi, addnum);
-            accumrlo = _mm256_add_epi32(accumrlo, addnum);
-            accumrhi = _mm256_add_epi32(accumrhi, addnum);
+            accumdlo = _mm256_add_epi32(accumdlo, addnum_hp);
+            accumdhi = _mm256_add_epi32(accumdhi, addnum_hp);
+            accumrlo = _mm256_add_epi32(accumrlo, addnum_hp);
+            accumrhi = _mm256_add_epi32(accumrhi, addnum_hp);
             accumdlo = _mm256_srli_epi32(accumdlo, 0x10);
             accumdhi = _mm256_srli_epi32(accumdhi, 0x10);
             accumrlo = _mm256_srli_epi32(accumrlo, 0x10);

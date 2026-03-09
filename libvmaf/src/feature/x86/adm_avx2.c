@@ -672,6 +672,18 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
     if (top < 0)     top = 0;
     if (bottom > h)  bottom = h;
 
+    /* Hoist loop-invariant constant vectors */
+    __m256d v_inv_4096_d = _mm256_set1_pd(1.0 / 4096.0);
+    __m256d v_zero_d = _mm256_setzero_pd();
+    __m256d v_cos_d = _mm256_set1_pd((double)cos_1deg_sq);
+    __m256i v_32768 = _mm256_set1_epi32(32768);
+    __m256i v_16384 = _mm256_set1_epi32(16384);
+    __m256i v_zero = _mm256_setzero_si256();
+    __m256 v_gain = _mm256_set1_ps((float)adm_enhn_gain_limit);
+    __m256 v_inv_32768_f = _mm256_set1_ps(1.0f / 32768.0f);
+    __m256 v_inv_64_f = _mm256_set1_ps(1.0f / 64.0f);
+    __m256 v_zero_f = _mm256_setzero_ps();
+
     for (int i = top; i < bottom; ++i) {
         int j = left;
 
@@ -727,10 +739,6 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
             __m256d t_mag_d_lo = _mm256_cvtps_pd(_mm256_castps256_ps128(t_mag_ps));
             __m256d t_mag_d_hi = _mm256_cvtps_pd(_mm256_extractf128_ps(t_mag_ps, 1));
 
-            __m256d v_inv_4096_d = _mm256_set1_pd(1.0 / 4096.0);
-            __m256d v_zero_d = _mm256_setzero_pd();
-            __m256d v_cos_d = _mm256_set1_pd((double)cos_1deg_sq);
-
             /* ot_dp / 4096.0 (multiply by exact reciprocal) */
             __m256d dp_lo = _mm256_mul_pd(ot_dp_d_lo, v_inv_4096_d);
             __m256d dp_hi = _mm256_mul_pd(ot_dp_d_hi, v_inv_4096_d);
@@ -777,7 +785,6 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
                 (full_mask & 0x01) ? -1 : 0
             );
             __m256 angle_mask_f = _mm256_castsi256_ps(angle_mask);
-            __m256 v_zero_f = _mm256_setzero_ps();
 
             /*
              * Division via lookup table:
@@ -787,9 +794,6 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
              * For the gather: index = o + 32768 (o is int16, so index is [0, 65536])
              * div_lookup is int32_t[65537]
              */
-            __m256i v_32768 = _mm256_set1_epi32(32768);
-            __m256i v_16384 = _mm256_set1_epi32(16384);
-            __m256i v_zero = _mm256_setzero_si256();
 
             /* --- band_h: kh --- */
             __m256i oh_idx = _mm256_add_epi32(oh, v_32768);
@@ -961,9 +965,6 @@ void adm_decouple_avx2(AdmBuffer *buf, int w, int h, int stride,
                  *
                  * Process each component using float arithmetic matching C reference.
                  */
-                __m256 v_gain = _mm256_set1_ps((float)adm_enhn_gain_limit);
-                __m256 v_inv_32768_f = _mm256_set1_ps(1.0f / 32768.0f);
-                __m256 v_inv_64_f = _mm256_set1_ps(1.0f / 64.0f);
 
                 /* Helper macro-like: apply enhancement gain limit */
                 /* band_h */
@@ -3507,15 +3508,24 @@ static inline void dwt2_horz_avx2_4(
     __m256i rounding, int shift,
     int32_t *out, int out_offset)
 {
-    /* Load 4 values for each tap using stride-2 access.
-     * For 4 outputs, we need: tmp[base], tmp[base+2], tmp[base+4], tmp[base+6]
-     * for tap0 (base = 2j-1). Use gather with stride-2 indices. */
-    __m128i idx = _mm_set_epi32(6, 4, 2, 0);
+    /* Load contiguous int32 values and extract stride-2 taps via permute.
+     * For 4 outputs at positions j..j+3 (base = 2j-1):
+     *   t0 = [base+0, base+2, base+4, base+6] (even of block0)
+     *   t1 = [base+1, base+3, base+5, base+7] (odd  of block0)
+     *   t2 = [base+2, base+4, base+6, base+8] (even of block1)
+     *   t3 = [base+3, base+5, base+7, base+9] (odd  of block1)
+     * Two 256-bit loads cover the needed range. */
+    __m256i block0 = _mm256_loadu_si256((const __m256i *)(tmp + base));      /* [0..7] */
+    __m256i block1 = _mm256_loadu_si256((const __m256i *)(tmp + base + 2));  /* [2..9] */
 
-    __m128i t0 = _mm_i32gather_epi32(tmp + base, idx, 4);
-    __m128i t1 = _mm_i32gather_epi32(tmp + base + 1, idx, 4);
-    __m128i t2 = _mm_i32gather_epi32(tmp + base + 2, idx, 4);
-    __m128i t3 = _mm_i32gather_epi32(tmp + base + 3, idx, 4);
+    /* Permute indices to extract even/odd elements into low 128 bits */
+    __m256i perm_even = _mm256_set_epi32(0, 0, 0, 0, 6, 4, 2, 0);
+    __m256i perm_odd  = _mm256_set_epi32(0, 0, 0, 0, 7, 5, 3, 1);
+
+    __m128i t0 = _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(block0, perm_even));
+    __m128i t1 = _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(block0, perm_odd));
+    __m128i t2 = _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(block1, perm_even));
+    __m128i t3 = _mm256_castsi256_si128(_mm256_permutevar8x32_epi32(block1, perm_odd));
 
     /* Multiply each tap by its coefficient and accumulate in int64.
      * _mm256_mul_epi32 multiplies even 32-bit lanes producing 64-bit results.
