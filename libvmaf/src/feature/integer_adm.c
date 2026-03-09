@@ -66,6 +66,16 @@ typedef struct AdmState {
     float (*adm_csf_den_scale_func)(const adm_dwt_band_t *src, int w, int h,
                                      int src_stride,
                                      const float csf_factors[4][2]);
+    void (*dwt2_s1_combined)(const int16_t *i2_ref_scale,
+                             const int16_t *i2_dis_scale,
+                             AdmBuffer *buf, int w, int h,
+                             int ref_stride, int dis_stride,
+                             int dst_stride);
+    void (*dwt2_s123_combined)(const int32_t *i4_ref_scale,
+                               const int32_t *i4_curr_dis,
+                               AdmBuffer *buf, int w, int h,
+                               int ref_stride, int dis_stride,
+                               int dst_stride, int scale);
     VmafDictionary *feature_name_dict;
 } AdmState;
 
@@ -2717,9 +2727,9 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
 			/* Scale 1: read directly from i16 band_a (from scale 0 DWT),
 			 * merging the i16-to-i32 conversion into the DWT vertical pass.
 			 * This eliminates the separate i16_to_i32 conversion pass. */
-            adm_dwt2_s1_combined(buf->ref_dwt2.band_a, buf->dis_dwt2.band_a,
-                                 buf, w, h, curr_ref_stride,
-                                 curr_dis_stride, buf_stride);
+            s->dwt2_s1_combined(buf->ref_dwt2.band_a, buf->dis_dwt2.band_a,
+                                buf, w, h, curr_ref_stride,
+                                curr_dis_stride, buf_stride);
 
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
@@ -2737,8 +2747,8 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
                          csf_factors);
 		}
 		else {
-            adm_dwt2_s123_combined(i4_curr_ref_scale, i4_curr_dis_scale, buf, w, h, curr_ref_stride,
-                                   curr_dis_stride, buf_stride, scale);
+            s->dwt2_s123_combined(i4_curr_ref_scale, i4_curr_dis_scale, buf, w, h, curr_ref_stride,
+                                  curr_dis_stride, buf_stride, scale);
 
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
@@ -2852,6 +2862,8 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     s->i4_adm_csf_func = i4_adm_csf;
     s->adm_csf_den_s123_func = adm_csf_den_s123;
     s->adm_csf_den_scale_func = adm_csf_den_scale;
+    s->dwt2_s1_combined = adm_dwt2_s1_combined;
+    s->dwt2_s123_combined = adm_dwt2_s123_combined;
 
 #if ARCH_X86
     unsigned flags = vmaf_get_cpu_flags();
@@ -2865,6 +2877,8 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
         s->i4_adm_csf_func = i4_adm_csf_avx2;
         s->adm_csf_den_s123_func = adm_csf_den_s123_avx2;
         s->adm_csf_den_scale_func = adm_csf_den_scale_avx2;
+        s->dwt2_s1_combined = adm_dwt2_s1_combined_avx2;
+        s->dwt2_s123_combined = adm_dwt2_s123_combined_avx2;
     }
 #elif ARCH_AARCH64
     unsigned flags = vmaf_get_cpu_flags();
