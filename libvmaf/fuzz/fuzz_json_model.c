@@ -31,7 +31,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     int err = vmaf_read_json_model_from_buffer(&model, &cfg,
                                                 (const char *)data,
                                                 (int)size);
-    if (!err && model) {
+    if (model) {
         vmaf_model_destroy(model);
     }
 
