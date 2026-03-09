@@ -421,6 +421,10 @@ run_test_direct() {
     if [[ $rc -eq 0 ]]; then
         color_green "  PASS  $test_name ${duration_ms:+($duration_ms)}"
         TOTAL_PASS=$((TOTAL_PASS + 1))
+    elif [[ $rc -eq 77 ]]; then
+        color_yellow "  SKIP  $test_name (test data not available) ${duration_ms:+($duration_ms)}"
+        TOTAL_SKIP=$((TOTAL_SKIP + 1))
+        SKIPPED_TESTS+=("$test_name (test data not available)")
     else
         color_red "  FAIL  $test_name (exit code $rc) ${duration_ms:+($duration_ms)}"
         TOTAL_FAIL=$((TOTAL_FAIL + 1))

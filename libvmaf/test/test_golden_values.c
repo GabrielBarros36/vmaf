@@ -364,9 +364,43 @@ static char *test_golden_cambi(void)
     return run_golden_test(&golden_test_cases[7]);
 }
 
+/* ---- Check for test video availability ---- */
+
+/*
+ * The golden value tests require YUV video files from python/test/resource/yuv/.
+ * These files are NOT tracked in git (they are in .gitignore) and are downloaded
+ * on demand by the Python test framework from the vmaf_resource repo.
+ *
+ * In CI, these files are typically not available for pure C test runs.
+ * When the files are missing, the test exits with code 77 which meson
+ * interprets as "skip" (Autotools convention).
+ */
+static int test_videos_available(void)
+{
+    char path[2048];
+    snprintf(path, sizeof(path), "%s%s", TEST_VIDEO_DIR,
+             golden_test_cases[0].ref_file);
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        fclose(f);
+        return 1;
+    }
+    return 0;
+}
+
 /* ---- Test runner ---- */
 char *run_tests(void)
 {
+    if (!test_videos_available()) {
+        fprintf(stderr,
+            "SKIP: test video files not found in %s\n"
+            "These files are downloaded by the Python test framework.\n"
+            "Run: python -c \"from vmaf.config import VmafConfig; "
+            "VmafConfig.test_resource_path('yuv', 'src01_hrc00_576x324.yuv')\"\n",
+            TEST_VIDEO_DIR);
+        exit(77);  /* meson "skip" exit code */
+    }
+
     mu_run_test(test_golden_vmaf_8bit);
     mu_run_test(test_golden_vmaf_identity);
     mu_run_test(test_golden_vmaf_12bit);
