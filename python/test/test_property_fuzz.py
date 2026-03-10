@@ -14,6 +14,27 @@ try:
     HAS_HYPOTHESIS = True
 except ImportError:
     HAS_HYPOTHESIS = False
+    # Provide no-op fallbacks so @given/@settings decorators don't crash at import
+    def given(**_kw):
+        return lambda f: f
+    def settings(**_kw):
+        def decorator(f):
+            return f
+        return decorator
+    def assume(_):
+        pass
+    class HealthCheck:
+        too_slow = None
+    class st:
+        @staticmethod
+        def tuples(*_a):
+            return None
+        @staticmethod
+        def sampled_from(_a):
+            return None
+        @staticmethod
+        def integers(**_kw):
+            return None
 
 from vmaf.config import VmafConfig
 

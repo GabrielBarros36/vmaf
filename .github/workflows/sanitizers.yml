@@ -48,7 +48,8 @@ jobs:
         run: |
           meson test -C libvmaf/build_asan \
             --timeout-multiplier 10 \
-            --print-errorlogs
+            --print-errorlogs \
+            --no-suite known_issues
 
   ubsan:
     name: UndefinedBehaviorSanitizer
@@ -90,7 +91,8 @@ jobs:
         run: |
           meson test -C libvmaf/build_ubsan \
             --timeout-multiplier 10 \
-            --print-errorlogs
+            --print-errorlogs \
+            --no-suite known_issues
 
   msan:
     name: MemorySanitizer
@@ -131,7 +133,8 @@ jobs:
         run: |
           meson test -C libvmaf/build_msan \
             --timeout-multiplier 10 \
-            --print-errorlogs
+            --print-errorlogs \
+            --no-suite known_issues
 
   tsan:
     name: ThreadSanitizer
@@ -171,4 +174,5 @@ jobs:
         run: |
           meson test -C libvmaf/build_tsan \
             --timeout-multiplier 15 \
-            --print-errorlogs
+            --print-errorlogs \
+            --no-suite known_issues

@@ -4,6 +4,10 @@ Issues discovered by new test infrastructure on the `test-harness` branch that
 exist identically in `master`. No code changes were made for these; they are
 documented here for someone to pick up independently.
 
+**CI Mitigation:** `test_simd_adm` is registered in the `known_issues` meson suite
+and excluded from all CI workflows via `--no-suite known_issues`. The test is still
+built and can be run manually (`meson test -C build --suite known_issues`).
+
 ---
 
 ## 1. ADM DWT2 AVX2 Horizontal Pass Boundary Overwrite

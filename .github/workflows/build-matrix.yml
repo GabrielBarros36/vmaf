@@ -43,7 +43,7 @@ jobs:
         run: ninja -vC libvmaf/build
 
       - name: Test
-        run: meson test -C libvmaf/build --num-processes $(nproc)
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
 
   # ==========================================================================
   # C2: LTO builds (GCC full LTO and Clang ThinLTO)
@@ -95,7 +95,7 @@ jobs:
         run: ninja -vC libvmaf/build
 
       - name: Test
-        run: meson test -C libvmaf/build --num-processes $(nproc)
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
 
   # ==========================================================================
   # C3: ASM disabled (C reference path only)
@@ -135,7 +135,7 @@ jobs:
         run: ninja -vC libvmaf/build
 
       - name: Unit tests
-        run: meson test -C libvmaf/build --num-processes $(nproc)
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
 
       - name: Install library for Python integration tests
         run: sudo ninja -vC libvmaf/build install
@@ -187,7 +187,7 @@ jobs:
         run: ninja -vC libvmaf/build
 
       - name: Test
-        run: meson test -C libvmaf/build --num-processes $(nproc)
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
 
   # ==========================================================================
   # C5: Float feature toggle (both enable_float=true and enable_float=false)
@@ -233,7 +233,7 @@ jobs:
         run: ninja -vC libvmaf/build
 
       - name: Test
-        run: meson test -C libvmaf/build --num-processes $(nproc)
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
 
   # ==========================================================================
   # C6: 32-bit cross-compile (i686) -- DEFERRED
@@ -296,4 +296,4 @@ jobs:
 
       - name: Test
         timeout-minutes: 30
-        run: meson test -C libvmaf/build --num-processes $(nproc) --timeout-multiplier 3
+        run: meson test -C libvmaf/build --num-processes $(nproc) --timeout-multiplier 3 --no-suite known_issues

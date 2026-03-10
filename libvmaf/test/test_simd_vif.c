@@ -311,11 +311,14 @@ static char *test_subsample_rd_8_avx2(void) {
             ref_subsample_rd_8(tb_ref.buf, w, h);
             vif_subsample_rd_8_avx2(tb_simd.buf, w, h);
 
-            /* Compare mu1 and mu2 */
+            /* Compare mu1 and mu2.
+             * AVX2 stores subsampled output at compact positions [h/2 x w/2],
+             * while the C reference stores full resolution [h x w].
+             * Map: SIMD(i, j) == Ref(i*2, j*2). */
             ptrdiff_t mu_stride = tb_ref.buf.stride_16 / sizeof(uint16_t);
-            for (unsigned i = 0; i < h; i++) {
-                for (unsigned j = 0; j < w; j++) {
-                    uint16_t rv = ((uint16_t *)tb_ref.buf.mu1)[i * mu_stride + j];
+            for (unsigned i = 0; i < h / 2; i++) {
+                for (unsigned j = 0; j < w / 2; j++) {
+                    uint16_t rv = ((uint16_t *)tb_ref.buf.mu1)[(i * 2) * mu_stride + (j * 2)];
                     uint16_t sv = ((uint16_t *)tb_simd.buf.mu1)[i * mu_stride + j];
                     if (rv != sv) {
                         snprintf(diag_msg, sizeof(diag_msg),
@@ -326,9 +329,9 @@ static char *test_subsample_rd_8_avx2(void) {
                     }
                 }
             }
-            for (unsigned i = 0; i < h; i++) {
-                for (unsigned j = 0; j < w; j++) {
-                    uint16_t rv = ((uint16_t *)tb_ref.buf.mu2)[i * mu_stride + j];
+            for (unsigned i = 0; i < h / 2; i++) {
+                for (unsigned j = 0; j < w / 2; j++) {
+                    uint16_t rv = ((uint16_t *)tb_ref.buf.mu2)[(i * 2) * mu_stride + (j * 2)];
                     uint16_t sv = ((uint16_t *)tb_simd.buf.mu2)[i * mu_stride + j];
                     if (rv != sv) {
                         snprintf(diag_msg, sizeof(diag_msg),
@@ -480,10 +483,11 @@ static char *test_subsample_rd_16_avx2(void) {
                     ref_subsample_rd_16(tb_ref.buf, w, h, scale, bpc);
                     vif_subsample_rd_16_avx2(tb_simd.buf, w, h, scale, bpc);
 
+                    /* AVX2 stores subsampled rows: SIMD row i == Ref row i*2 */
                     ptrdiff_t mu_stride = tb_ref.buf.stride_16 / sizeof(uint16_t);
-                    for (unsigned i = 0; i < h; i++) {
+                    for (unsigned i = 0; i < h / 2; i++) {
                         for (unsigned j = 0; j < w; j++) {
-                            uint16_t rv = ((uint16_t *)tb_ref.buf.mu1)[i * mu_stride + j];
+                            uint16_t rv = ((uint16_t *)tb_ref.buf.mu1)[(i * 2) * mu_stride + j];
                             uint16_t sv = ((uint16_t *)tb_simd.buf.mu1)[i * mu_stride + j];
                             if (rv != sv) {
                                 snprintf(diag_msg, sizeof(diag_msg),
