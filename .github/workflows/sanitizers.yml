@@ -99,7 +99,7 @@ jobs:
       CC: clang
       CXX: clang++
       MSAN_OPTIONS: >-
-        halt_on_error=1:print_stats=1
+        halt_on_error=1:print_stats=1:track_origins=2
     steps:
       - name: Setup python
         uses: actions/setup-python@v6
@@ -122,9 +122,7 @@ jobs:
             -Denable_float=true \
             -Denable_asm=false \
             -Db_sanitize=memory \
-            -Db_lundef=false \
-            -Dc_args="-fsanitize-memory-track-origins=2 -Wno-error=unused-command-line-argument" \
-            -Dcpp_args="-fsanitize-memory-track-origins=2 -Wno-error=unused-command-line-argument"
+            -Db_lundef=false
 
       - name: Build
         run: ninja -vC libvmaf/build_msan

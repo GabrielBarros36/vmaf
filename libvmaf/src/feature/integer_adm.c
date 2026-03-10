@@ -2869,14 +2869,13 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     unsigned flags = vmaf_get_cpu_flags();
     if (flags & VMAF_X86_CPU_FLAG_AVX2) {
         if (!(w % 8)) s->dwt2_8 = adm_dwt2_8_avx2;
-        s->dwt2_s1_combined = adm_dwt2_s1_combined_avx2;
-        s->dwt2_s123_combined = adm_dwt2_s123_combined_avx2;
         /* TODO: re-enable after fixing precision regression (test_precision_differential
-         * reports adm2_score delta of 0.84 on gradient_vs_random42 synthetic input).
-         * Bug is in one of these 8 functions; needs x86 debugging to isolate.
-         * Keeping DWT AVX2 (tested by SIMD oracle) and falling back to C reference
-         * for decouple/CSF/CM until the bug is found.
+         * reports adm2_score delta of 0.765 on gradient_vs_random42 synthetic input).
+         * Precision test passes on ARM (C reference) but fails on x86 (AVX2).
+         * Disabling all untested AVX2 ADM dispatches until bugs are isolated.
          *
+         * s->dwt2_s1_combined = adm_dwt2_s1_combined_avx2;
+         * s->dwt2_s123_combined = adm_dwt2_s123_combined_avx2;
          * s->adm_decouple = adm_decouple_avx2;
          * s->adm_decouple_s123_func = adm_decouple_s123_avx2;
          * s->adm_csf_func = adm_csf_avx2;

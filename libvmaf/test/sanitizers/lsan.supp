@@ -3,4 +3,6 @@
 # Reference: https://github.com/google/sanitizers/wiki/AddressSanitizerLeakSanitizer#suppressions
 
 # Suppress leak detection in third-party libsvm allocations
+leak:svm_predict_values
+leak:svm_load_model
 leak:svm_

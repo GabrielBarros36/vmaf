@@ -92,16 +92,17 @@ def _run_vmaf(ref_y4m, dis_y4m, model="vmaf_v0.6.1", feature=None,
 
 # ---- Strategies ----
 
-# Constrained dimensions: even, reasonable size for CI speed
-valid_dimensions = st.tuples(
-    st.sampled_from([32, 64, 128, 192]),   # width (must be even for 420)
-    st.sampled_from([32, 64, 108, 128]),   # height (must be even for 420)
-)
+if HAS_HYPOTHESIS:
+    # Constrained dimensions: even, reasonable size for CI speed
+    valid_dimensions = st.tuples(
+        st.sampled_from([32, 64, 128, 192]),   # width (must be even for 420)
+        st.sampled_from([32, 64, 108, 128]),   # height (must be even for 420)
+    )
 
-valid_bpc = st.sampled_from([8, 10])
+    valid_bpc = st.sampled_from([8, 10])
 
-pixel_value_8bit = st.integers(min_value=0, max_value=255)
-pixel_value_10bit = st.integers(min_value=0, max_value=1023)
+    pixel_value_8bit = st.integers(min_value=0, max_value=255)
+    pixel_value_10bit = st.integers(min_value=0, max_value=1023)
 
 
 # ---- P1: VMAF(ref, ref) == 100.0 ----

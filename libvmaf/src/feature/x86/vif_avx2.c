@@ -233,8 +233,8 @@ do { \
             int32_t sigma2_sq_ = (int32_t)(yy)[(base) + b_]; \
             int32_t sigma12_ = (int32_t)(xy)[(base) + b_]; \
             if (sigma12_ > 0 && sigma2_sq_ > 0) { \
-                int32_t sv_sq_ = (int32_t)sv_arr_[b_]; \
-                sv_sq_ = (uint32_t)(MAX(sv_sq_, 0)); \
+                double sv_d_ = sv_arr_[b_]; \
+                uint32_t sv_sq_ = sv_d_ > 0.0 ? (uint32_t)sv_d_ : 0; \
                 uint32_t numer1_ = (sv_sq_ + sigma_nsq); \
                 int64_t numer1_tmp_ = (int64_t)(gg_xx_arr_[b_]) + numer1_; \
                 accum_num_log += log2_64(log2_table, numer1_tmp_) - log2_64(log2_table, numer1_); \
@@ -1444,10 +1444,10 @@ void vif_subsample_rd_8_avx2(VifBuffer buf, unsigned w, unsigned h) {
 
             /* Symmetric-tap optimization: add paired taps before multiply.
              * Each value is <=255 after vertical >>8, so sum <=510 fits u16. */
-            __m256i rsum08 = _mm256_add_epi32(refconvol0, refconvol8);
-            __m256i rsum17 = _mm256_add_epi32(refconvol1, refconvol7);
-            __m256i rsum26 = _mm256_add_epi32(refconvol2, refconvol6);
-            __m256i rsum35 = _mm256_add_epi32(refconvol3, refconvol5);
+            __m256i rsum08 = _mm256_add_epi16(refconvol0, refconvol8);
+            __m256i rsum17 = _mm256_add_epi16(refconvol1, refconvol7);
+            __m256i rsum26 = _mm256_add_epi16(refconvol2, refconvol6);
+            __m256i rsum35 = _mm256_add_epi16(refconvol3, refconvol5);
 
             __m256i result2 = _mm256_mulhi_epu16(rsum08, fcoeff0);
             __m256i result2lo = _mm256_mullo_epi16(rsum08, fcoeff0);
@@ -1490,10 +1490,10 @@ void vif_subsample_rd_8_avx2(VifBuffer buf, unsigned w, unsigned h) {
             __m256i disconvol6 = _mm256_alignr_epi8(disconvol8, disconvol4, 8);
             __m256i disconvol7 = _mm256_alignr_epi8(disconvol8, disconvol4, 12);
             /* Symmetric-tap optimization for dis */
-            __m256i dsum08 = _mm256_add_epi32(disconvol0, disconvol8);
-            __m256i dsum17 = _mm256_add_epi32(disconvol1, disconvol7);
-            __m256i dsum26 = _mm256_add_epi32(disconvol2, disconvol6);
-            __m256i dsum35 = _mm256_add_epi32(disconvol3, disconvol5);
+            __m256i dsum08 = _mm256_add_epi16(disconvol0, disconvol8);
+            __m256i dsum17 = _mm256_add_epi16(disconvol1, disconvol7);
+            __m256i dsum26 = _mm256_add_epi16(disconvol2, disconvol6);
+            __m256i dsum35 = _mm256_add_epi16(disconvol3, disconvol5);
 
             result2 = _mm256_mulhi_epu16(dsum08, fcoeff0);
             result2lo = _mm256_mullo_epi16(dsum08, fcoeff0);
