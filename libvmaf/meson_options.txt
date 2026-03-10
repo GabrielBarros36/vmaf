@@ -42,3 +42,13 @@ option('enable_nvcc',
     type: 'boolean',
     value: true,
     description: 'Use clang to compile CUDA code.')
+
+option('enable_fuzz',
+    type: 'boolean',
+    value: false,
+    description: 'Build fuzz targets (requires clang with libFuzzer)')
+
+option('enable_lto',
+    type: 'boolean',
+    value: false,
+    description: 'Enable Link-Time Optimization')

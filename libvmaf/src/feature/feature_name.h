@@ -19,11 +19,16 @@
 #ifndef __VMAF_FEATURE_NAME_H__
 #define __VMAF_FEATURE_NAME_H__
 
+#include <stddef.h>
+
 #include "dict.h"
 #include "opt.h"
 
 char *vmaf_feature_name_from_options(const char *name, const VmafOption *opts,
                                      void *obj);
+
+int vmaf_feature_name_from_options_buf(const char *name, const VmafOption *opts,
+                                       void *obj, char *buf, size_t buf_sz);
 
 VmafDictionary *
 vmaf_feature_name_dict_from_provided_features(const char **provided_features,

@@ -1,0 +1,263 @@
+{
+    "version": 1,
+    "generated_with": {
+        "build_flags": "-Denable_asm=false -Denable_float=true",
+        "date": "2026-03-08",
+        "note": "Values generated on aarch64 with GCC 13.3, single-threaded, no subsampling"
+    },
+    "test_cases": [
+        {
+            "id": "vmaf_8bit_576x324",
+            "description": "VMAF v0.6.1 on 8-bit 576x324 src01 ref vs. dis",
+            "ref_video": "src01_hrc00_576x324.yuv",
+            "dis_video": "src01_hrc01_576x324.yuv",
+            "width": 576,
+            "height": 324,
+            "pix_fmt": "yuv420p",
+            "bit_depth": 8,
+            "model": "vmaf_v0.6.1",
+            "n_frames": 48,
+            "scores": {
+                "vmaf": {
+                    "mean": 76.6689048244369,
+                    "tolerance": 1e-4
+                },
+                "VMAF_integer_feature_vif_scale0_score": {
+                    "mean": 0.363662071526051,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale1_score": {
+                    "mean": 0.767495281994343,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale2_score": {
+                    "mean": 0.863107771923145,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale3_score": {
+                    "mean": 0.915720089028279,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_adm2_score": {
+                    "mean": 0.9345057762924,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_motion2_score": {
+                    "mean": 3.89534507195155,
+                    "tolerance": 1e-6
+                },
+                "psnr_y": {
+                    "mean": 30.755064021049,
+                    "tolerance": 1e-4
+                },
+                "psnr_cb": {
+                    "mean": 38.4494410571618,
+                    "tolerance": 1e-4
+                },
+                "psnr_cr": {
+                    "mean": 40.991910248629,
+                    "tolerance": 1e-4
+                },
+                "float_ssim": {
+                    "mean": 0.863226603716612,
+                    "tolerance": 1e-4
+                },
+                "float_ms_ssim": {
+                    "mean": 0.963240616895571,
+                    "tolerance": 1e-4
+                }
+            }
+        },
+        {
+            "id": "vmaf_8bit_576x324_identity",
+            "description": "VMAF v0.6.1 on 8-bit 576x324 ref vs. ref (identity)",
+            "ref_video": "src01_hrc00_576x324.yuv",
+            "dis_video": "src01_hrc00_576x324.yuv",
+            "width": 576,
+            "height": 324,
+            "pix_fmt": "yuv420p",
+            "bit_depth": 8,
+            "model": "vmaf_v0.6.1",
+            "n_frames": 48,
+            "scores": {
+                "vmaf": {
+                    "mean": 99.9464266316011,
+                    "tolerance": 1e-4
+                },
+                "VMAF_integer_feature_adm2_score": {
+                    "mean": 1.00000225228643,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale0_score": {
+                    "mean": 0.999999955296516,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale1_score": {
+                    "mean": 0.999999555448691,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale2_score": {
+                    "mean": 0.999999310821295,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale3_score": {
+                    "mean": 0.999999190370242,
+                    "tolerance": 1e-6
+                },
+                "psnr_y": {
+                    "mean": 60.0,
+                    "tolerance": 1e-4
+                },
+                "psnr_cb": {
+                    "mean": 60.0,
+                    "tolerance": 1e-4
+                },
+                "psnr_cr": {
+                    "mean": 60.0,
+                    "tolerance": 1e-4
+                },
+                "float_ssim": {
+                    "mean": 1.0,
+                    "tolerance": 1e-4
+                },
+                "float_ms_ssim": {
+                    "mean": 1.0,
+                    "tolerance": 1e-4
+                }
+            }
+        },
+        {
+            "id": "vmaf_12bit_576x324",
+            "description": "VMAF v0.6.1 on 12-bit 576x324 src01 ref vs. dis",
+            "ref_video": "src01_hrc00_576x324.yuv420p12le.yuv",
+            "dis_video": "src01_hrc01_576x324.yuv420p12le.yuv",
+            "width": 576,
+            "height": 324,
+            "pix_fmt": "yuv420p12le",
+            "bit_depth": 12,
+            "model": "vmaf_v0.6.1",
+            "n_frames": 3,
+            "scores": {
+                "vmaf": {
+                    "mean": 82.5652300478838,
+                    "tolerance": 1e-4
+                },
+                "VMAF_integer_feature_vif_scale0_score": {
+                    "mean": 0.433089315891266,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale1_score": {
+                    "mean": 0.830613315105438,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale2_score": {
+                    "mean": 0.907212158044179,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_vif_scale3_score": {
+                    "mean": 0.945895850658417,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_adm2_score": {
+                    "mean": 0.951770445547814,
+                    "tolerance": 1e-6
+                },
+                "VMAF_integer_feature_motion2_score": {
+                    "mean": 2.81045309702555,
+                    "tolerance": 1e-6
+                }
+            }
+        },
+        {
+            "id": "vmaf_neg_8bit_576x324",
+            "description": "VMAF NEG (v0.6.1neg) on 8-bit 576x324 src01 ref vs. dis",
+            "ref_video": "src01_hrc00_576x324.yuv",
+            "dis_video": "src01_hrc01_576x324.yuv",
+            "width": 576,
+            "height": 324,
+            "pix_fmt": "yuv420p",
+            "bit_depth": 8,
+            "model": "vmaf_v0.6.1neg",
+            "n_frames": 48,
+            "scores": {
+                "vmaf": {
+                    "mean": 75.0747291238163,
+                    "tolerance": 1e-4
+                }
+            }
+        },
+        {
+            "id": "vmaf_4k_8bit_576x324",
+            "description": "VMAF 4K on 8-bit 576x324 src01 ref vs. dis",
+            "ref_video": "src01_hrc00_576x324.yuv",
+            "dis_video": "src01_hrc01_576x324.yuv",
+            "width": 576,
+            "height": 324,
+            "pix_fmt": "yuv420p",
+            "bit_depth": 8,
+            "model": "vmaf_4k_v0.6.1",
+            "n_frames": 48,
+            "scores": {
+                "vmaf": {
+                    "mean": 84.9506472652734,
+                    "tolerance": 1e-4
+                }
+            }
+        },
+        {
+            "id": "vmaf_float_8bit_576x324",
+            "description": "VMAF float on 8-bit 576x324 src01 ref vs. dis",
+            "ref_video": "src01_hrc00_576x324.yuv",
+            "dis_video": "src01_hrc01_576x324.yuv",
+            "width": 576,
+            "height": 324,
+            "pix_fmt": "yuv420p",
+            "bit_depth": 8,
+            "model": "vmaf_float_v0.6.1",
+            "n_frames": 48,
+            "scores": {
+                "vmaf": {
+                    "mean": 76.6842971132081,
+                    "tolerance": 1e-4
+                }
+            }
+        },
+        {
+            "id": "vmaf_b_v063_8bit_576x324",
+            "description": "VMAF v0.6.3 (bootstrap model collection) on 8-bit 576x324 src01 ref vs. dis",
+            "ref_video": "src01_hrc00_576x324.yuv",
+            "dis_video": "src01_hrc01_576x324.yuv",
+            "width": 576,
+            "height": 324,
+            "pix_fmt": "yuv420p",
+            "bit_depth": 8,
+            "model": "vmaf_b_v0.6.3",
+            "model_type": "collection",
+            "n_frames": 48,
+            "scores": {
+                "vmaf_bagging": {
+                    "mean": 74.9363363308294,
+                    "tolerance": 1e-4
+                }
+            }
+        },
+        {
+            "id": "cambi_8bit_576x324",
+            "description": "CAMBI on 8-bit 576x324 src01 distorted (no-ref metric)",
+            "ref_video": null,
+            "dis_video": "src01_hrc01_576x324.yuv",
+            "width": 576,
+            "height": 324,
+            "pix_fmt": "yuv420p",
+            "bit_depth": 8,
+            "model": null,
+            "n_frames": 48,
+            "scores": {
+                "cambi": {
+                    "mean": 0.259684181909746,
+                    "tolerance": 1e-4
+                }
+            }
+        }
+    ]
+}

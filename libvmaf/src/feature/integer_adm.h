@@ -155,4 +155,14 @@ static const float dwt_7_9_basis_function_amplitudes[6][4] = {
     {0.045943, 0.059758, 0.077727, 0.059758},
     {0.023013, 0.030018, 0.039156, 0.030018}};
 
+/* Function pointer types for contrast masking (CM) functions */
+typedef float (*adm_cm_fn)(AdmBuffer *buf, int w, int h, int src_stride,
+                           int csf_a_stride,
+                           const float csf_factors[4][2],
+                           double adm_norm_view_dist, int adm_ref_display_height);
+
+typedef float (*i4_adm_cm_fn)(AdmBuffer *buf, int w, int h, int src_stride,
+                              int csf_a_stride, int scale,
+                              const float csf_factors[4][2]);
+
 #endif /* _FEATURE_ADM_H_ */

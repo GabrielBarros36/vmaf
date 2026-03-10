@@ -1,0 +1,90 @@
+VMAF Benchmark Summary
+======================
+
+Label:   baseline-master
+Date:    20260308_230653
+
+--- Machine State ---
+timestamp:    2026-03-08T23:07:02Z
+hostname:     ip-172-31-46-90
+kernel:       6.17.0-1007-aws
+cpu:          AMD EPYC 7R13 48-Core Processor
+logical_cpus: 192
+numa_nodes:   4
+governor:     performance
+cpu_freq_mhz: 2650.000
+boost:        0
+aslr:         0
+thp:          always
+perf_paranoid:-1
+avx_flags:    avx avx2 
+loadavg_1m:   0.43
+vmaf_commit:  332dde62838d91d8b5216e9822de58851f2fd64f
+
+--- Timing and Hardware Counters (7 runs, mean ± stddev) ---
+    28,531,116,584      cycles                                                                  ( +-  0.05% )
+    89,349,167,496      instructions                     #    3.13  insn per cycle              ( +-  0.01% )
+     2,356,124,823      cache-references                                                        ( +-  0.15% )
+       267,570,709      cache-misses                     #   11.36% of all cache refs           ( +-  1.08% )
+        72,203,745      branch-misses                                                           ( +-  0.14% )
+           2.68722 +- 0.00251 seconds time elapsed  ( +-  0.09% )
+
+--- Top CPU Hotspots ---
+    97.66%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff7929c6c
+            |
+            ---0x7ffff7929c6c
+               |          
+                --97.66%--0x7ffff789caa4
+                          |          
+                           --97.66%--vmaf_thread_pool_runner
+                                     |          
+                                      --97.66%--threaded_extract_func
+                                                vmaf_feature_extractor_context_extract
+                                                |          
+                                                |--61.08%--extract
+                                                |          |          
+                                                |          |--41.96%--vif_statistic_8_avx2
+                                                |          |          
+                                                |          |--14.58%--vif_statistic_16_avx2
+                                                |          |          
+                                                |          |--3.79%--vif_subsample_rd_8_avx2
+                                                |          |          
+                                                |           --0.75%--vif_subsample_rd_16_avx2
+                                                |          
+                                                |--32.92%--extract
+                                                |          integer_compute_adm
+                                                |          |          
+                                                |          |--4.69%--adm_cm
+                                                |          |          
+                                                |          |--3.96%--adm_decouple_s123
+                                                |          |          
+                                                |           --1.80%--adm_dwt2_8_avx2
+                                                |          
+                                                 --3.28%--extract
+                                                           |          
+                                                           |--1.49%--x_convolution_16_avx2
+                                                           |          
+                                                           |--0.94%--y_convolution_8
+                                                           |          
+                                                            --0.84%--sad_c
+
+    97.66%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff789caa4
+            |
+            ---0x7ffff789caa4
+               |          
+                --97.66%--vmaf_thread_pool_runner
+                          |          
+                           --97.66%--threaded_extract_func
+                                     vmaf_feature_extractor_context_extract
+                                     |          
+                                     |--61.08%--extract
+                                     |          |          
+                                     |          |--41.96%--vif_statistic_8_avx2
+
+--- Result Files ---
+  /root/Development/vmaf/bench-results/20260308_230653_baseline-master/
+  ├── env.txt          machine state
+  ├── perf-stat.txt    raw perf stat output (timing + hw counters)
+  ├── perf-report.txt  per-function hotspots
+  ├── flamegraph.svg   open in browser for interactive call tree
+  └── summary.txt      this file

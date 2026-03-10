@@ -18,6 +18,12 @@ libvmaf_src_root = meson.current_source_dir()
 cc = meson.get_compiler('c')
 libvmaf_inc = include_directories(['include'])
 
+if get_option('enable_lto')
+    add_project_arguments('-flto', language: ['c', 'cpp'])
+    add_project_link_arguments('-flto', language: ['c', 'cpp'])
+    message('Link-Time Optimization (LTO) enabled')
+endif
+
 # Arguments in test_args will be used even on feature tests
 test_args = []
 if host_machine.system() == 'linux' or host_machine.system() == 'windows' or host_machine.system() == 'cygwin'
@@ -51,3 +57,4 @@ subdir('src')
 subdir('tools')
 subdir('doc')
 subdir('test')
+subdir('fuzz')

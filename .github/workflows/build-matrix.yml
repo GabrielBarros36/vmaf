@@ -1,0 +1,299 @@
+name: Build Configuration Matrix
+
+on:
+  push:
+  pull_request:
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  # ==========================================================================
+  # C1: Debug build
+  # Purpose: Catch assert() failures that are compiled out in release mode.
+  # Debug builds keep NDEBUG undefined so all assert() macros are active.
+  # ==========================================================================
+  debug-build:
+    name: "C1: Debug build"
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install meson
+          sudo apt-get update
+          sudo apt-get install -yq ninja-build nasm gcc g++
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build \
+            --buildtype debug \
+            -Denable_float=true
+
+      - name: Build
+        run: ninja -vC libvmaf/build
+
+      - name: Test
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
+
+  # ==========================================================================
+  # C2: LTO builds (GCC full LTO and Clang ThinLTO)
+  # Purpose: Cross-translation-unit analysis catches ODR violations and
+  # certain classes of UB that per-TU compilation misses.
+  # ==========================================================================
+  lto-build:
+    name: "C2: LTO (${{ matrix.cc }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+            lto_mode: "default"
+          - cc: clang
+            cxx: clang++
+            lto_mode: "thin"
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install meson
+          sudo apt-get update
+          sudo apt-get install -yq ninja-build nasm gcc g++ clang lld
+
+      - name: Configure
+        run: |
+          lto_args="-Db_lto=true"
+          if [ "${{ matrix.lto_mode }}" = "thin" ]; then
+            lto_args="$lto_args -Db_lto_mode=thin"
+          fi
+          meson setup libvmaf libvmaf/build \
+            --buildtype release \
+            $lto_args \
+            -Denable_float=true
+
+      - name: Build
+        run: ninja -vC libvmaf/build
+
+      - name: Test
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
+
+  # ==========================================================================
+  # C3: ASM disabled (C reference path only)
+  # Purpose: Forces all SIMD dispatch points to use the C reference
+  # implementation. Validates fallback path correctness with both unit tests
+  # and Python integration tests.
+  # ==========================================================================
+  asm-disabled:
+    name: "C3: ASM disabled (C reference only)"
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install meson tox
+          sudo apt-get update
+          sudo apt-get install -yq ninja-build gcc g++
+          # NASM is not needed when ASM is disabled
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build \
+            --buildtype release \
+            -Denable_asm=false \
+            -Denable_float=true
+
+      - name: Build
+        run: ninja -vC libvmaf/build
+
+      - name: Unit tests
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
+
+      - name: Install library for Python integration tests
+        run: sudo ninja -vC libvmaf/build install
+
+      - name: Python integration tests
+        run: tox -c python
+
+  # ==========================================================================
+  # C4: AVX-512 disabled (AVX2-only dispatch path)
+  # Purpose: On AVX-512-capable runners, ensures the AVX2 path is exercised
+  # end-to-end. On non-AVX-512 runners, confirms the build succeeds.
+  # ==========================================================================
+  avx512-disabled:
+    name: "C4: AVX-512 disabled (AVX2-only path)"
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install meson
+          sudo apt-get update
+          sudo apt-get install -yq ninja-build nasm gcc g++
+
+      - name: Check AVX-512 support
+        run: |
+          if grep -q avx512 /proc/cpuinfo; then
+            echo "Runner has AVX-512 -- C4 tests AVX2-only fallback path"
+          else
+            echo "Runner lacks AVX-512 -- C4 confirms build succeeds without AVX-512"
+          fi
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build \
+            --buildtype release \
+            -Denable_avx512=false \
+            -Denable_float=true
+
+      - name: Build
+        run: ninja -vC libvmaf/build
+
+      - name: Test
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
+
+  # ==========================================================================
+  # C5: Float feature toggle (both enable_float=true and enable_float=false)
+  # Purpose: Ensures both float and integer-only codepaths compile and pass
+  # tests independently. Float-disabled skips Python integration tests since
+  # they depend on float models.
+  # ==========================================================================
+  float-toggle:
+    name: "C5: Float ${{ matrix.float_enabled && 'enabled' || 'disabled' }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - float_enabled: true
+            enable_float: "true"
+          - float_enabled: false
+            enable_float: "false"
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install meson
+          sudo apt-get update
+          sudo apt-get install -yq ninja-build nasm gcc g++
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build \
+            --buildtype release \
+            -Denable_float=${{ matrix.enable_float }}
+
+      - name: Build
+        run: ninja -vC libvmaf/build
+
+      - name: Test
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
+
+  # ==========================================================================
+  # C6: 32-bit cross-compile (i686) -- DEFERRED
+  # Purpose: Expose integer-width bugs (truncation on size_t, pointer
+  # arithmetic, struct padding). Requires gcc-multilib and a cross-file.
+  #
+  # DEFERRED: This job requires special setup (gcc-multilib, libc6-dev-i386,
+  # cross-compilation file) and has a known score mismatch that needs
+  # investigation. It will be added in a follow-up once the 32-bit score
+  # divergence is resolved.
+  # See: windows.yml comment "Disabled 32-bit job due to vmaf score mismatch"
+  # ==========================================================================
+
+  # ==========================================================================
+  # C7: Older compilers (GCC 7, GCC 8) -- DEFERRED
+  # Purpose: Catch C11/C++11 standards-compliance regressions that newer
+  # compilers accept silently.
+  #
+  # DEFERRED: GCC 7 requires an ubuntu:20.04 container (not available via PPA
+  # on ubuntu-latest). GCC 8 may need a PPA. These require special runner
+  # setup and will be added in a follow-up.
+  # ==========================================================================
+
+  # ==========================================================================
+  # C8: -O0 build (no optimization)
+  # Purpose: UB that happens to work under -O2 (due to constant folding or
+  # dead-code elimination) will often crash or produce wrong results at -O0.
+  # Extended timeout since test execution is 3-5x slower without optimization.
+  # ==========================================================================
+  o0-build:
+    name: "C8: -O0 (no optimization)"
+    runs-on: ubuntu-latest
+    env:
+      CC: gcc
+      CXX: g++
+      CFLAGS: "-O0"
+      CXXFLAGS: "-O0"
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install meson
+          sudo apt-get update
+          sudo apt-get install -yq ninja-build nasm gcc g++
+
+      - name: Configure
+        run: |
+          meson setup libvmaf libvmaf/build \
+            --buildtype debug \
+            -Denable_float=true
+
+      - name: Build
+        run: ninja -vC libvmaf/build
+
+      - name: Test
+        timeout-minutes: 30
+        run: meson test -C libvmaf/build --num-processes $(nproc) --timeout-multiplier 3 --no-suite known_issues

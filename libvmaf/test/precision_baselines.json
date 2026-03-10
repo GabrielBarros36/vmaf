@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "baselines": {
+    "ADM.adm2": {
+      "max_abs_delta": 6.01e-04,
+      "tolerance": 5e-03,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "ADM.scale0": {
+      "max_abs_delta": 4.29e-04,
+      "tolerance": 5e-03,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "ADM.scale1": {
+      "max_abs_delta": 9.61e-05,
+      "tolerance": 5e-03,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "ADM.scale2": {
+      "max_abs_delta": 1.85e-03,
+      "tolerance": 5e-03,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "ADM.scale3": {
+      "max_abs_delta": 9.68e-04,
+      "tolerance": 5e-03,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "VIF.scale0": {
+      "max_abs_delta": 1.07e-03,
+      "tolerance": 2e-02,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "VIF.scale1": {
+      "max_abs_delta": 9.22e-05,
+      "tolerance": 2e-02,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "VIF.scale2": {
+      "max_abs_delta": 2.82e-04,
+      "tolerance": 2e-02,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "VIF.scale3": {
+      "max_abs_delta": 8.68e-03,
+      "tolerance": 2e-02,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "Motion.motion2": {
+      "max_abs_delta": 0.0,
+      "tolerance": 1e-04,
+      "updated": "2026-03-08",
+      "input": "synthetic_576x324_8bit"
+    },
+    "Motion.motion": {
+      "max_abs_delta": 0.0,
+      "tolerance": 1e-04,
+      "updated": "2026-03-08",
+      "input": "synthetic_576x324_8bit"
+    },
+    "PSNR.psnr_y": {
+      "max_abs_delta": 0.0,
+      "tolerance": 1e-04,
+      "updated": "2026-03-08",
+      "input": "synthetic_gradient_vs_random42_576x324_8bit"
+    },
+    "SSIM.ssim": {
+      "max_abs_delta": 0.0,
+      "tolerance": 1e-03,
+      "updated": "2026-03-08",
+      "input": "synthetic_reproducibility_576x324_8bit"
+    }
+  }
+}

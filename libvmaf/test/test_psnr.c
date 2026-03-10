@@ -63,6 +63,8 @@ static char *test_16b_large_diff()
         .enable_mse = 1,
         .enable_apsnr = 0,
         .peak = 65535,
+        .compute_sse_8 = psnr_sse_8_c,
+        .compute_sse_hbd = psnr_sse_hbd_c,
     };
 
     err |= psnr_hbd(&pic1, &pic2, 0, fc, &psnr_state);

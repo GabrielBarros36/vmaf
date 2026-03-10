@@ -55,7 +55,7 @@ jobs:
         run: meson install -C libvmaf/build
 
       - name: Test vmaf
-        run: meson test -C libvmaf/build --num-processes $(nproc)
+        run: meson test -C libvmaf/build --num-processes $(nproc) --no-suite known_issues
 
       - name: Get binary path & Current Release
         id: get_info

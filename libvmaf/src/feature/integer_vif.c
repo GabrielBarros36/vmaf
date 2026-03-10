@@ -31,6 +31,7 @@
 
 #include "picture.h"
 #include "integer_vif.h"
+#include "vif_log2_table.h"
 
 #if ARCH_X86
 #include "x86/vif_avx2.h"
@@ -75,21 +76,22 @@ static const VmafOption options[] = {
 };
 
 static FORCE_INLINE void
-pad_top_and_bottom(VifBuffer buf, unsigned h, int fwidth)
+pad_top_and_bottom(VifBuffer buf, unsigned h, int fwidth,
+                   size_t data_width)
 {
     const unsigned fwidth_half = fwidth / 2;
     unsigned char *ref = buf.ref;
     unsigned char *dis = buf.dis;
     for (unsigned i = 1; i <= fwidth_half; ++i) {
         size_t offset = buf.stride * i;
-        memcpy(ref - offset, ref + offset, buf.stride);
-        memcpy(dis - offset, dis + offset, buf.stride);
+        memcpy(ref - offset, ref + offset, data_width);
+        memcpy(dis - offset, dis + offset, data_width);
         memcpy(ref + buf.stride * (h - 1) + buf.stride * i,
                ref + buf.stride * (h - 1) - buf.stride * i,
-               buf.stride);
+               data_width);
         memcpy(dis + buf.stride * (h - 1) + buf.stride * i,
                dis + buf.stride * (h - 1) - buf.stride * i,
-               buf.stride);
+               data_width);
     }
 }
 
@@ -107,7 +109,8 @@ decimate_and_pad(VifBuffer buf, unsigned w, unsigned h, int scale)
             dis[i * stride + j] = buf.mu2[(i * 2) * mu_stride + (j * 2)];
         }
     }
-    pad_top_and_bottom(buf, h / 2, vif_filter1d_width[scale]);
+    pad_top_and_bottom(buf, h / 2, vif_filter1d_width[scale],
+                       (w / 2) * sizeof(uint16_t));
 }
 
 static void subsample_rd_8(VifBuffer buf, unsigned w, unsigned h)
@@ -214,12 +217,12 @@ static void subsample_rd_16(VifBuffer buf, unsigned w, unsigned h, int scale, in
 
 static inline void log_generate(uint16_t *log2_table)
 {
-    for (unsigned i = 32767; i < 65536; ++i) {
-        log2_table[i] = (uint16_t)round(log2f((float)i) * 2048);
-    }
+    memcpy(log2_table + VIF_LOG2_TABLE_OFFSET,
+           vif_log2_table,
+           VIF_LOG2_TABLE_SIZE * sizeof(uint16_t));
 }
 
-void vif_statistic_8(struct VifPublicState *s, float *num, float *den, unsigned w, unsigned h) {
+void vif_statistic_8(struct VifPublicState *RESTRICT s, float *RESTRICT num, float *RESTRICT den, unsigned w, unsigned h) {
     const unsigned fwidth = vif_filter1d_width[0];
     const uint16_t *vif_filt_s0 = vif_filter1d_table[0];
     VifBuffer buf = s->buf;
@@ -342,7 +345,7 @@ void vif_statistic_8(struct VifPublicState *s, float *num, float *den, unsigned 
     den[0] = accum_den_log / 2048.0 + accum_den_non_log;
 }
 
-void vif_statistic_16(struct VifPublicState *s, float *num, float *den, unsigned w, unsigned h, int bpc, int scale) {
+void vif_statistic_16(struct VifPublicState *RESTRICT s, float *RESTRICT num, float *RESTRICT den, unsigned w, unsigned h, int bpc, int scale) {
     const unsigned fwidth = vif_filter1d_width[scale];
     const uint16_t *vif_filt = vif_filter1d_table[scale];
     VifBuffer buf = s->buf;
@@ -772,7 +775,8 @@ static int extract(VmafFeatureExtractor *fex,
         ref_out += s->public.buf.stride;
         dis_out += s->public.buf.stride;
     }
-    pad_top_and_bottom(s->public.buf, h, vif_filter1d_width[0]);
+    pad_top_and_bottom(s->public.buf, h, vif_filter1d_width[0],
+                       w << (ref_pic->bpc > 8));
 
     VifScore vif_score;
     for (unsigned scale = 0; scale < 4; ++scale) {

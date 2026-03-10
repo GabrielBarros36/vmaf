@@ -1,0 +1,8 @@
+# MSan ignorelist for libvmaf
+# Format: src:file_pattern or fun:function_pattern
+# Passed via: -fsanitize-blacklist=msan.ignorelist
+# Reference: https://clang.llvm.org/docs/SanitizerSpecialCaseList.html
+
+# Ignore uninstrumented NASM assembly output buffers
+src:*/x86/*.asm
+fun:cpuid

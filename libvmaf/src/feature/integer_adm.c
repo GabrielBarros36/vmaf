@@ -17,6 +17,7 @@
  */
 
 #include "cpu.h"
+#include "common/macros.h"
 #include "dict.h"
 #include "feature_collector.h"
 #include "feature_extractor.h"
@@ -38,9 +39,43 @@ typedef struct AdmState {
     double adm_enhn_gain_limit;
     double adm_norm_view_dist;
     int adm_ref_display_height;
+    // Precomputed CSF (Contrast Sensitivity Function) coefficients.
+    // csf_factors[scale][0] = dwt_quant_step(scale, theta=1)
+    // csf_factors[scale][1] = dwt_quant_step(scale, theta=2)
+    // These depend only on adm_norm_view_dist and adm_ref_display_height,
+    // which are constant across frames, so we compute them once at init.
+    float csf_factors[4][2];
     void (*dwt2_8)(const uint8_t *src, const adm_dwt_band_t *dst,
                    AdmBuffer *buf, int w, int h, int src_stride,
                    int dst_stride);
+    void (*adm_decouple)(AdmBuffer *buf, int w, int h, int stride,
+                         double adm_enhn_gain_limit,
+                         const int32_t *div_lookup_ptr);
+    void (*adm_decouple_s123_func)(AdmBuffer *buf, int w, int h, int stride,
+                                   double adm_enhn_gain_limit);
+    void (*adm_csf_func)(AdmBuffer *buf, int w, int h, int stride,
+                         uint16_t i_rfactor[3], uint8_t i_shifts[3],
+                         uint16_t i_shiftsadd[3]);
+    adm_cm_fn adm_cm_func;
+    i4_adm_cm_fn i4_adm_cm_func;
+    void (*i4_adm_csf_func)(AdmBuffer *buf, int scale, int w, int h,
+                             int stride, const float csf_factors[4][2]);
+    float (*adm_csf_den_s123_func)(const i4_adm_dwt_band_t *src, int scale,
+                                    int w, int h, int src_stride,
+                                    const float csf_factors[4][2]);
+    float (*adm_csf_den_scale_func)(const adm_dwt_band_t *src, int w, int h,
+                                     int src_stride,
+                                     const float csf_factors[4][2]);
+    void (*dwt2_s1_combined)(const int16_t *i2_ref_scale,
+                             const int16_t *i2_dis_scale,
+                             AdmBuffer *buf, int w, int h,
+                             int ref_stride, int dis_stride,
+                             int dst_stride);
+    void (*dwt2_s123_combined)(const int32_t *i4_ref_scale,
+                               const int32_t *i4_curr_dis,
+                               AdmBuffer *buf, int w, int h,
+                               int ref_stride, int dis_stride,
+                               int dst_stride, int scale);
     VmafDictionary *feature_name_dict;
 } AdmState;
 
@@ -657,9 +692,11 @@ static void dwt2_src_indices_filt(int **src_ind_y, int **src_ind_x, int w, int h
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
-static void adm_decouple(AdmBuffer *buf, int w, int h, int stride,
-                         double adm_enhn_gain_limit)
+static void adm_decouple(AdmBuffer *RESTRICT buf, int w, int h, int stride,
+                         double adm_enhn_gain_limit,
+                         const int32_t *div_lookup_ptr)
 {
+    (void)div_lookup_ptr; /* C reference uses file-scope div_lookup directly */
     const float cos_1deg_sq = cos(1.0 * M_PI / 180.0) * cos(1.0 * M_PI / 180.0);
 
     const adm_dwt_band_t *ref = &buf->ref_dwt2;
@@ -786,7 +823,7 @@ static inline uint16_t get_best15_from32(uint32_t temp, int *x)
     return temp;
 }
 
-static void adm_decouple_s123(AdmBuffer *buf, int w, int h, int stride,
+static void adm_decouple_s123(AdmBuffer *RESTRICT buf, int w, int h, int stride,
                               double adm_enhn_gain_limit)
 {
     const float cos_1deg_sq = cos(1.0 * M_PI / 180.0) * cos(1.0 * M_PI / 180.0);
@@ -929,8 +966,9 @@ static void adm_decouple_s123(AdmBuffer *buf, int w, int h, int stride,
     }
 }
 
-static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
-                    double adm_norm_view_dist, int adm_ref_display_height)
+static void adm_csf_inner(AdmBuffer *buf, int w, int h, int stride,
+                          uint16_t i_rfactor[3], uint8_t i_shifts[3],
+                          uint16_t i_shiftsadd[3])
 {
     const adm_dwt_band_t *src = &buf->decouple_a;
     const adm_dwt_band_t *dst = &buf->csf_a;
@@ -940,45 +978,6 @@ static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
     int16_t *dst_angles[3] = { dst->band_h, dst->band_v, dst->band_d };
     int16_t *flt_angles[3] = { flt->band_h, flt->band_v, flt->band_d };
 
-    // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
-    // 1 to 4 (from finest scale to coarsest scale).
-    // 0 is scale zero passed to dwt_quant_step
-
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
-    const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
-
-    /**
-     * rfactor is converted to fixed-point for scale0 and stored in i_rfactor
-     * multiplied by 2^21 for rfactor[0,1] and by 2^23 for rfactor[2].
-     * For adm_norm_view_dist 3.0 and adm_ref_display_height 1080,
-     * i_rfactor is around { 36453,36453,49417 }
-     */
-    uint16_t i_rfactor[3];
-    if (fabs(adm_norm_view_dist * adm_ref_display_height - DEFAULT_ADM_NORM_VIEW_DIST * DEFAULT_ADM_REF_DISPLAY_HEIGHT) < 1.0e-8) {
-        i_rfactor[0] = 36453;
-        i_rfactor[1] = 36453;
-        i_rfactor[2] = 49417;
-    }
-    else {
-        const double pow2_21 = pow(2, 21);
-        const double pow2_23 = pow(2, 23);
-        i_rfactor[0] = (uint16_t) (rfactor1[0] * pow2_21);
-        i_rfactor[1] = (uint16_t) (rfactor1[1] * pow2_21);
-        i_rfactor[2] = (uint16_t) (rfactor1[2] * pow2_23);
-    }
-
-    /**
-     * Shifts pending from previous stage is 6
-     * hence variables multiplied by i_rfactor[0,1] has to be shifted by 21+6=27 to convert
-     * into floating-point. But shifted by 15 to make it Q16
-     * and variables multiplied by i_factor[2] has to be shifted by 23+6=29 to convert into
-     * floating-point. But shifted by 17 to make it Q16
-     * Hence remaining shifts after shifting by i_shifts is 12 to make it equivalent to
-     * floating-point
-     */
-    uint8_t i_shifts[3] = { 15,15,17 };
-    uint16_t i_shiftsadd[3] = { 16384, 16384, 65535 };
     uint16_t FIX_ONE_BY_30 = 4369; //(1/30)*2^17
     /* The computation of the csf values is not required for the regions which
      *lie outside the frame borders
@@ -1021,8 +1020,57 @@ static void adm_csf(AdmBuffer *buf, int w, int h, int stride,
     }
 }
 
-static void i4_adm_csf(AdmBuffer *buf, int scale, int w, int h, int stride,
-                       double adm_norm_view_dist, int adm_ref_display_height)
+static void adm_csf(AdmBuffer *RESTRICT buf, int w, int h, int stride,
+                    const float csf_factors[4][2],
+                    double adm_norm_view_dist, int adm_ref_display_height,
+                    void (*csf_func)(AdmBuffer *, int, int, int,
+                                     uint16_t[3], uint8_t[3], uint16_t[3]))
+{
+    // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
+    // 1 to 4 (from finest scale to coarsest scale).
+    // 0 is scale zero - use precomputed CSF factors
+
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
+    const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
+
+    /**
+     * rfactor is converted to fixed-point for scale0 and stored in i_rfactor
+     * multiplied by 2^21 for rfactor[0,1] and by 2^23 for rfactor[2].
+     * For adm_norm_view_dist 3.0 and adm_ref_display_height 1080,
+     * i_rfactor is around { 36453,36453,49417 }
+     */
+    uint16_t i_rfactor[3];
+    if (fabs(adm_norm_view_dist * adm_ref_display_height - DEFAULT_ADM_NORM_VIEW_DIST * DEFAULT_ADM_REF_DISPLAY_HEIGHT) < 1.0e-8) {
+        i_rfactor[0] = 36453;
+        i_rfactor[1] = 36453;
+        i_rfactor[2] = 49417;
+    }
+    else {
+        const double pow2_21 = pow(2, 21);
+        const double pow2_23 = pow(2, 23);
+        i_rfactor[0] = (uint16_t) (rfactor1[0] * pow2_21);
+        i_rfactor[1] = (uint16_t) (rfactor1[1] * pow2_21);
+        i_rfactor[2] = (uint16_t) (rfactor1[2] * pow2_23);
+    }
+
+    /**
+     * Shifts pending from previous stage is 6
+     * hence variables multiplied by i_rfactor[0,1] has to be shifted by 21+6=27 to convert
+     * into floating-point. But shifted by 15 to make it Q16
+     * and variables multiplied by i_factor[2] has to be shifted by 23+6=29 to convert into
+     * floating-point. But shifted by 17 to make it Q16
+     * Hence remaining shifts after shifting by i_shifts is 12 to make it equivalent to
+     * floating-point
+     */
+    uint8_t i_shifts[3] = { 15,15,17 };
+    uint16_t i_shiftsadd[3] = { 16384, 16384, 65535 };
+
+    csf_func(buf, w, h, stride, i_rfactor, i_shifts, i_shiftsadd);
+}
+
+static void i4_adm_csf(AdmBuffer *RESTRICT buf, int scale, int w, int h, int stride,
+                       const float csf_factors[4][2])
 {
     const i4_adm_dwt_band_t *src = &buf->i4_decouple_a;
     const i4_adm_dwt_band_t *dst = &buf->i4_csf_a;
@@ -1034,8 +1082,8 @@ static void i4_adm_csf(AdmBuffer *buf, int scale, int w, int h, int stride,
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
+    const float factor1 = csf_factors[scale][0];
+    const float factor2 = csf_factors[scale][1];
     const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     //i_rfactor in fixed-point
@@ -1098,14 +1146,14 @@ static void i4_adm_csf(AdmBuffer *buf, int scale, int w, int h, int stride,
     }
 }
 
-static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
+static float adm_csf_den_scale(const adm_dwt_band_t *RESTRICT src, int w, int h,
                                int src_stride,
-                               double adm_norm_view_dist, int adm_ref_display_height)
+                               const float csf_factors[4][2])
 {
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
     const float rfactor[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     uint64_t accum_h = 0, accum_v = 0, accum_d = 0;
@@ -1181,14 +1229,14 @@ static float adm_csf_den_scale(const adm_dwt_band_t *src, int w, int h,
 
 }
 
-static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, int h,
-                              int src_stride,
-                              double adm_norm_view_dist, int adm_ref_display_height)
+static float adm_csf_den_s123(const i4_adm_dwt_band_t *RESTRICT src, int scale,
+                              int w, int h, int src_stride,
+                              const float csf_factors[4][2])
 {
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
+    float factor1 = csf_factors[scale][0];
+    float factor2 = csf_factors[scale][1];
     const float rfactor[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     uint64_t accum_h = 0, accum_v = 0, accum_d = 0;
@@ -1263,7 +1311,9 @@ static float adm_csf_den_s123(const i4_adm_dwt_band_t *src, int scale, int w, in
     return (den_scale_h + den_scale_v + den_scale_d);
 }
 
-static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stride,
+static float adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
+                    int csf_a_stride,
+                    const float csf_factors[4][2],
                     double adm_norm_view_dist, int adm_ref_display_height)
 {
     const adm_dwt_band_t *src   = &buf->decouple_r;
@@ -1272,10 +1322,10 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    // 0 is scale zero passed to dwt_quant_step
+    // 0 is scale zero - use precomputed CSF factors
 
-    const float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 1, adm_norm_view_dist, adm_ref_display_height);
-    const float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], 0, 2, adm_norm_view_dist, adm_ref_display_height);
+    const float factor1 = csf_factors[0][0];
+    const float factor2 = csf_factors[0][1];
     const float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     /**
@@ -1413,13 +1463,14 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     if ((left > 0) && (right <= (w - 1))) /* Completely within frame */
     {
         for (i = start_row; i < end_row; ++i) {
+            const int i_offset = i * src_stride;
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
             for (j = start_col; j < end_col; ++j) {
-                xh = src->band_h[i * src_stride + j] * i_rfactor[0];
-                xv = src->band_v[i * src_stride + j] * i_rfactor[1];
-                xd = src->band_d[i * src_stride + j] * i_rfactor[2];
+                xh = src->band_h[i_offset + j] * i_rfactor[0];
+                xv = src->band_v[i_offset + j] * i_rfactor[1];
+                xd = src->band_d[i_offset + j] * i_rfactor[2];
                 ADM_CM_THRESH_S_I_J(angles, flt_angles, csf_a_stride, &thr, w, h, i, j);
 
                 ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1437,14 +1488,15 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     else if ((left <= 0) && (right <= (w - 1))) /* Right border within frame, left outside */
     {
         for (i = start_row; i < end_row; ++i) {
+            const int i_offset = i * src_stride;
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
 
             /* j = 0 */
-            xh = src->band_h[i * src_stride] * i_rfactor[0];
-            xv = src->band_v[i * src_stride] * i_rfactor[1];
-            xd = src->band_d[i * src_stride] * i_rfactor[2];
+            xh = src->band_h[i_offset] * i_rfactor[0];
+            xv = src->band_v[i_offset] * i_rfactor[1];
+            xd = src->band_d[i_offset] * i_rfactor[2];
             ADM_CM_THRESH_S_I_0(angles, flt_angles, csf_a_stride, &thr, w, h, i, 0);
 
             ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1456,9 +1508,9 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
 
             /* j within frame */
             for (j = start_col; j < end_col; ++j) {
-                xh = src->band_h[i * src_stride + j] * i_rfactor[0];
-                xv = src->band_v[i * src_stride + j] * i_rfactor[1];
-                xd = src->band_d[i * src_stride + j] * i_rfactor[2];
+                xh = src->band_h[i_offset + j] * i_rfactor[0];
+                xv = src->band_v[i_offset + j] * i_rfactor[1];
+                xd = src->band_d[i_offset + j] * i_rfactor[2];
                 ADM_CM_THRESH_S_I_J(angles, flt_angles, csf_a_stride, &thr, w, h, i, j);
 
                 ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1476,14 +1528,15 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     else if ((left > 0) && (right > (w - 1))) /* Left border within frame, right outside */
     {
         for (i = start_row; i < end_row; ++i) {
+            const int i_offset = i * src_stride;
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
             /* j within frame */
             for (j = start_col; j < end_col; ++j) {
-                xh = src->band_h[i * src_stride + j] * i_rfactor[0];
-                xv = src->band_v[i * src_stride + j] * i_rfactor[1];
-                xd = src->band_d[i * src_stride + j] * i_rfactor[2];
+                xh = src->band_h[i_offset + j] * i_rfactor[0];
+                xv = src->band_v[i_offset + j] * i_rfactor[1];
+                xd = src->band_d[i_offset + j] * i_rfactor[2];
                 ADM_CM_THRESH_S_I_J(angles, flt_angles, csf_a_stride, &thr, w, h, i, j);
 
                 ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1494,9 +1547,9 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
                                    add_shift_xdcub, shift_xdcub, accum_inner_d);
             }
             /* j = w-1 */
-            xh = src->band_h[i * src_stride + w - 1] * i_rfactor[0];
-            xv = src->band_v[i * src_stride + w - 1] * i_rfactor[1];
-            xd = src->band_d[i * src_stride + w - 1] * i_rfactor[2];
+            xh = src->band_h[i_offset + w - 1] * i_rfactor[0];
+            xv = src->band_v[i_offset + w - 1] * i_rfactor[1];
+            xd = src->band_d[i_offset + w - 1] * i_rfactor[2];
             ADM_CM_THRESH_S_I_W_M_1(angles, flt_angles, csf_a_stride, &thr, w, h, i, (w - 1));
 
             ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1515,14 +1568,15 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     else /* Both borders outside frame */
     {
         for (i = start_row; i < end_row; ++i) {
+            const int i_offset = i * src_stride;
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
 
             /* j = 0 */
-            xh = src->band_h[i * src_stride] * i_rfactor[0];
-            xv = src->band_v[i * src_stride] * i_rfactor[1];
-            xd = src->band_d[i * src_stride] * i_rfactor[2];
+            xh = src->band_h[i_offset] * i_rfactor[0];
+            xv = src->band_v[i_offset] * i_rfactor[1];
+            xd = src->band_d[i_offset] * i_rfactor[2];
             ADM_CM_THRESH_S_I_0(angles, flt_angles, csf_a_stride, &thr, w, h, i, 0);
 
             ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1534,9 +1588,9 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
 
             /* j within frame */
             for (j = start_col; j < end_col; ++j) {
-                xh = src->band_h[i * src_stride + j] * i_rfactor[0];
-                xv = src->band_v[i * src_stride + j] * i_rfactor[1];
-                xd = src->band_d[i * src_stride + j] * i_rfactor[2];
+                xh = src->band_h[i_offset + j] * i_rfactor[0];
+                xv = src->band_v[i_offset + j] * i_rfactor[1];
+                xd = src->band_d[i_offset + j] * i_rfactor[2];
                 ADM_CM_THRESH_S_I_J(angles, flt_angles, csf_a_stride, &thr, w, h, i, j);
 
                 ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1547,9 +1601,9 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
                                    add_shift_xdcub, shift_xdcub, accum_inner_d);
             }
             /* j = w-1 */
-            xh = src->band_h[i * src_stride + w - 1] * i_rfactor[0];
-            xv = src->band_v[i * src_stride + w - 1] * i_rfactor[1];
-            xd = src->band_d[i * src_stride + w - 1] * i_rfactor[2];
+            xh = src->band_h[i_offset + w - 1] * i_rfactor[0];
+            xv = src->band_v[i_offset + w - 1] * i_rfactor[1];
+            xd = src->band_d[i_offset + w - 1] * i_rfactor[2];
             ADM_CM_THRESH_S_I_W_M_1(angles, flt_angles, csf_a_stride, &thr, w, h, i, (w - 1));
 
             ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1568,12 +1622,14 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     accum_inner_v = 0;
     accum_inner_d = 0;
 
+    const int hm1_src_offset = (h - 1) * src_stride;
+
     /* i=h-1,j=0 */
     if ((bottom > (h - 1)) && (left <= 0))
     {
-        xh = src->band_h[(h - 1) * src_stride] * i_rfactor[0];
-        xv = src->band_v[(h - 1) * src_stride] * i_rfactor[1];
-        xd = src->band_d[(h - 1) * src_stride] * i_rfactor[2];
+        xh = src->band_h[hm1_src_offset] * i_rfactor[0];
+        xv = src->band_v[hm1_src_offset] * i_rfactor[1];
+        xd = src->band_d[hm1_src_offset] * i_rfactor[2];
         ADM_CM_THRESH_S_H_M_1_0(angles, flt_angles, csf_a_stride, &thr, w, h, (h - 1), 0);
 
         ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1587,9 +1643,9 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     /* i=h-1,j */
     if (bottom > (h - 1)) {
         for (j = start_col; j < end_col; ++j) {
-            xh = src->band_h[(h - 1) * src_stride + j] * i_rfactor[0];
-            xv = src->band_v[(h - 1) * src_stride + j] * i_rfactor[1];
-            xd = src->band_d[(h - 1) * src_stride + j] * i_rfactor[2];
+            xh = src->band_h[hm1_src_offset + j] * i_rfactor[0];
+            xv = src->band_v[hm1_src_offset + j] * i_rfactor[1];
+            xd = src->band_d[hm1_src_offset + j] * i_rfactor[2];
             ADM_CM_THRESH_S_H_M_1_J(angles, flt_angles, csf_a_stride, &thr, w, h, (h - 1), j);
 
             ADM_CM_ACCUM_ROUND(xh, thr, shift_xhsub, xh_sq, add_shift_xhsq, shift_xhsq, val,
@@ -1604,9 +1660,9 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     /* i-h-1,j=w-1 */
     if ((bottom > (h - 1)) && (right > (w - 1)))
     {
-        xh = src->band_h[(h - 1) * src_stride + w - 1] * i_rfactor[0];
-        xv = src->band_v[(h - 1) * src_stride + w - 1] * i_rfactor[1];
-        xd = src->band_d[(h - 1) * src_stride + w - 1] * i_rfactor[2];
+        xh = src->band_h[hm1_src_offset + w - 1] * i_rfactor[0];
+        xv = src->band_v[hm1_src_offset + w - 1] * i_rfactor[1];
+        xd = src->band_d[hm1_src_offset + w - 1] * i_rfactor[2];
         ADM_CM_THRESH_S_H_M_1_W_M_1(angles, flt_angles, csf_a_stride, &thr, w, h,
             (h - 1), (w - 1));
 
@@ -1634,18 +1690,17 @@ static float adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stri
     float f_accum_v = (float)(accum_v / pow(2, (52 - shift_xvcub - shift_inner_accum)));
     float f_accum_d = (float)(accum_d / pow(2, (57 - shift_xdcub - shift_inner_accum)));
 
-    float num_scale_h = powf(f_accum_h, 1.0f / 3.0f) + powf((bottom - top) *
-                        (right - left) / 32.0f, 1.0f / 3.0f);
-    float num_scale_v = powf(f_accum_v, 1.0f / 3.0f) + powf((bottom - top) *
-                        (right - left) / 32.0f, 1.0f / 3.0f);
-    float num_scale_d = powf(f_accum_d, 1.0f / 3.0f) + powf((bottom - top) *
-                        (right - left) / 32.0f, 1.0f / 3.0f);
+    const float powf_add = powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
+    float num_scale_h = powf(f_accum_h, 1.0f / 3.0f) + powf_add;
+    float num_scale_v = powf(f_accum_v, 1.0f / 3.0f) + powf_add;
+    float num_scale_d = powf(f_accum_d, 1.0f / 3.0f) + powf_add;
 
     return (num_scale_h + num_scale_v + num_scale_d);
 }
 
-static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_stride, int scale,
-                       double adm_norm_view_dist, int adm_ref_display_height)
+static float i4_adm_cm(AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
+                       int csf_a_stride, int scale,
+                       const float csf_factors[4][2])
 {
     const i4_adm_dwt_band_t *src = &buf->i4_decouple_r;
     const i4_adm_dwt_band_t *csf_f = &buf->i4_csf_f;
@@ -1653,8 +1708,8 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
 
     // for ADM: scales goes from 0 to 3 but in noise floor paper, it goes from
     // 1 to 4 (from finest scale to coarsest scale).
-    float factor1 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 1, adm_norm_view_dist, adm_ref_display_height);
-    float factor2 = dwt_quant_step(&dwt_7_9_YCbCr_threshold[0], scale, 2, adm_norm_view_dist, adm_ref_display_height);
+    float factor1 = csf_factors[scale][0];
+    float factor2 = csf_factors[scale][1];
     float rfactor1[3] = { 1.0f / factor1, 1.0f / factor1, 1.0f / factor2 };
 
     const uint32_t rfactor[3] = { (uint32_t)(rfactor1[0] * pow(2, 32)),
@@ -1706,17 +1761,25 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     int64_t val;
     int64_t accum_h = 0, accum_v = 0, accum_d = 0;
     int64_t accum_inner_h = 0, accum_inner_v = 0, accum_inner_d = 0;
+
+    /* Hoist loop-invariant scale-indexed values */
+    const int scale_idx = scale - 1;
+    const int32_t add_bef_shift_dst_s = add_bef_shift_dst[scale_idx];
+    const uint32_t shift_dst_s = shift_dst[scale_idx];
+    const int32_t add_bef_shift_flt_s = add_bef_shift_flt[scale_idx];
+    const uint32_t shift_flt_s = shift_flt[scale_idx];
+
     /* i=0,j=0 */
     if ((top <= 0) && (left <= 0))
     {
-        xh = (int32_t)((((int64_t)src->band_h[0] * rfactor[0]) + add_bef_shift_dst[scale - 1])
-            >> shift_dst[scale - 1]);
-        xv = (int32_t)((((int64_t)src->band_v[0] * rfactor[1]) + add_bef_shift_dst[scale - 1])
-            >> shift_dst[scale - 1]);
-        xd = (int32_t)((((int64_t)src->band_d[0] * rfactor[2]) + add_bef_shift_dst[scale - 1])
-            >> shift_dst[scale - 1]);
+        xh = (int32_t)((((int64_t)src->band_h[0] * rfactor[0]) + add_bef_shift_dst_s)
+            >> shift_dst_s);
+        xv = (int32_t)((((int64_t)src->band_v[0] * rfactor[1]) + add_bef_shift_dst_s)
+            >> shift_dst_s);
+        xd = (int32_t)((((int64_t)src->band_d[0] * rfactor[2]) + add_bef_shift_dst_s)
+            >> shift_dst_s);
         I4_ADM_CM_THRESH_S_0_0(angles, flt_angles, csf_a_stride, &thr, w, h, 0, 0,
-                                       add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                       add_bef_shift_flt_s, shift_flt_s);
 
         I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                               add_shift_cub, shift_cub, accum_inner_h);
@@ -1732,13 +1795,13 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
         for (j = start_col; j < end_col; ++j)
         {
             xh = (int32_t)((((int64_t)src->band_h[j] * rfactor[0]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+                add_bef_shift_dst_s) >> shift_dst_s);
             xv = (int32_t)((((int64_t)src->band_v[j] * rfactor[1]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+                add_bef_shift_dst_s) >> shift_dst_s);
             xd = (int32_t)((((int64_t)src->band_d[j] * rfactor[2]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+                add_bef_shift_dst_s) >> shift_dst_s);
             I4_ADM_CM_THRESH_S_0_J(angles, flt_angles, csf_a_stride, &thr, w, h,
-                                           0, j, add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                           0, j, add_bef_shift_flt_s, shift_flt_s);
 
             I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                   add_shift_cub, shift_cub, accum_inner_h);
@@ -1753,13 +1816,13 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     if ((top <= 0) && (right > (w - 1)))
     {
         xh = (int32_t)((((int64_t)src->band_h[w - 1] * rfactor[0]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+            add_bef_shift_dst_s) >> shift_dst_s);
         xv = (int32_t)((((int64_t)src->band_v[w - 1] * rfactor[1]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+            add_bef_shift_dst_s) >> shift_dst_s);
         xd = (int32_t)((((int64_t)src->band_d[w - 1] * rfactor[2]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+            add_bef_shift_dst_s) >> shift_dst_s);
         I4_ADM_CM_THRESH_S_0_W_M_1(angles, flt_angles, csf_a_stride, &thr, w, h, 0, (w - 1),
-                                           add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                           add_bef_shift_flt_s, shift_flt_s);
 
         I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                               add_shift_cub, shift_cub, accum_inner_h);
@@ -1777,20 +1840,21 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     {
         for (i = start_row; i < end_row; ++i)
         {
+            const int i_offset = i * src_stride;
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
             for (j = start_col; j < end_col; ++j)
             {
 
-                xh = (int32_t)((((int64_t)src->band_h[i * src_stride + j] * rfactor[0]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-                xv = (int32_t)((((int64_t)src->band_v[i * src_stride + j] * rfactor[1]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-                xd = (int32_t)((((int64_t)src->band_d[i * src_stride + j] * rfactor[2]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+                xh = (int32_t)((((int64_t)src->band_h[i_offset + j] * rfactor[0]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
+                xv = (int32_t)((((int64_t)src->band_v[i_offset + j] * rfactor[1]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
+                xd = (int32_t)((((int64_t)src->band_d[i_offset + j] * rfactor[2]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
                 I4_ADM_CM_THRESH_S_I_J(angles, flt_angles, csf_a_stride, &thr, w, h, i, j,
-                                               add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                               add_bef_shift_flt_s, shift_flt_s);
 
                 I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                       add_shift_cub, shift_cub, accum_inner_h);
@@ -1808,19 +1872,20 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     {
         for (i = start_row; i < end_row; ++i)
         {
+            const int i_offset = i * src_stride;
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
 
             /* j = 0 */
-            xh = (int32_t)((((int64_t)src->band_h[i * src_stride] * rfactor[0]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xv = (int32_t)((((int64_t)src->band_v[i * src_stride] * rfactor[1]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xd = (int32_t)((((int64_t)src->band_d[i * src_stride] * rfactor[2]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+            xh = (int32_t)((((int64_t)src->band_h[i_offset] * rfactor[0]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
+            xv = (int32_t)((((int64_t)src->band_v[i_offset] * rfactor[1]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
+            xd = (int32_t)((((int64_t)src->band_d[i_offset] * rfactor[2]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
             I4_ADM_CM_THRESH_S_I_0(angles, flt_angles, csf_a_stride, &thr, w, h, i, 0,
-                                           add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                           add_bef_shift_flt_s, shift_flt_s);
 
             I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                   add_shift_cub, shift_cub, accum_inner_h);
@@ -1832,14 +1897,14 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
             /* j within frame */
             for (j = start_col; j < end_col; ++j)
             {
-                xh = (int32_t)((((int64_t)src->band_h[i * src_stride + j] * rfactor[0]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-                xv = (int32_t)((((int64_t)src->band_v[i * src_stride + j] * rfactor[1]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-                xd = (int32_t)((((int64_t)src->band_d[i * src_stride + j] * rfactor[2]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+                xh = (int32_t)((((int64_t)src->band_h[i_offset + j] * rfactor[0]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
+                xv = (int32_t)((((int64_t)src->band_v[i_offset + j] * rfactor[1]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
+                xd = (int32_t)((((int64_t)src->band_d[i_offset + j] * rfactor[2]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
                 I4_ADM_CM_THRESH_S_I_J(angles, flt_angles, csf_a_stride, &thr, w, h, i, j,
-                                               add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                               add_bef_shift_flt_s, shift_flt_s);
 
                 I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                       add_shift_cub, shift_cub, accum_inner_h);
@@ -1857,20 +1922,21 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     {
         for (i = start_row; i < end_row; ++i)
         {
+            const int i_offset = i * src_stride;
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
             /* j within frame */
             for (j = start_col; j < end_col; ++j)
             {
-                xh = (int32_t)((((int64_t)src->band_h[i * src_stride + j] * rfactor[0]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-                xv = (int32_t)((((int64_t)src->band_v[i * src_stride + j] * rfactor[1]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-                xd = (int32_t)((((int64_t)src->band_d[i * src_stride + j] * rfactor[2]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+                xh = (int32_t)((((int64_t)src->band_h[i_offset + j] * rfactor[0]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
+                xv = (int32_t)((((int64_t)src->band_v[i_offset + j] * rfactor[1]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
+                xd = (int32_t)((((int64_t)src->band_d[i_offset + j] * rfactor[2]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
                 I4_ADM_CM_THRESH_S_I_J(angles, flt_angles, csf_a_stride, &thr, w, h, i, j,
-                                               add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                               add_bef_shift_flt_s, shift_flt_s);
 
                 I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                       add_shift_cub, shift_cub, accum_inner_h);
@@ -1880,14 +1946,14 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
                                       add_shift_cub, shift_cub, accum_inner_d);
             }
             /* j = w-1 */
-            xh = (int32_t)((((int64_t)src->band_h[i * src_stride + w - 1] * rfactor[i * src_stride + w - 1])
-                + add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xv = (int32_t)((((int64_t)src->band_v[i * src_stride + w - 1] * rfactor[i * src_stride + w - 1])
-                + add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xd = (int32_t)((((int64_t)src->band_d[i * src_stride + w - 1] * rfactor[i * src_stride + w - 1])
-                + add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+            xh = (int32_t)((((int64_t)src->band_h[i_offset + w - 1] * rfactor[i_offset + w - 1])
+                + add_bef_shift_dst_s) >> shift_dst_s);
+            xv = (int32_t)((((int64_t)src->band_v[i_offset + w - 1] * rfactor[i_offset + w - 1])
+                + add_bef_shift_dst_s) >> shift_dst_s);
+            xd = (int32_t)((((int64_t)src->band_d[i_offset + w - 1] * rfactor[i_offset + w - 1])
+                + add_bef_shift_dst_s) >> shift_dst_s);
             I4_ADM_CM_THRESH_S_I_W_M_1(angles, flt_angles, csf_a_stride, &thr, w, h, i, (w - 1),
-                                               add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                               add_bef_shift_flt_s, shift_flt_s);
 
             I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                   add_shift_cub, shift_cub, accum_inner_h);
@@ -1905,19 +1971,20 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     {
         for (i = start_row; i < end_row; ++i)
         {
+            const int i_offset = i * src_stride;
             accum_inner_h = 0;
             accum_inner_v = 0;
             accum_inner_d = 0;
 
             /* j = 0 */
-            xh = (int32_t)((((int64_t)src->band_h[i * src_stride] * rfactor[0]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xv = (int32_t)((((int64_t)src->band_v[i * src_stride] * rfactor[1]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xd = (int32_t)((((int64_t)src->band_d[i * src_stride] * rfactor[2]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+            xh = (int32_t)((((int64_t)src->band_h[i_offset] * rfactor[0]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
+            xv = (int32_t)((((int64_t)src->band_v[i_offset] * rfactor[1]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
+            xd = (int32_t)((((int64_t)src->band_d[i_offset] * rfactor[2]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
             I4_ADM_CM_THRESH_S_I_0(angles, flt_angles, csf_a_stride, &thr, w, h, i, 0,
-                                           add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                           add_bef_shift_flt_s, shift_flt_s);
 
             I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                   add_shift_cub, shift_cub, accum_inner_h);
@@ -1929,14 +1996,14 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
             /* j within frame */
             for (j = start_col; j < end_col; ++j)
             {
-                xh = (int32_t)((((int64_t)src->band_h[i * src_stride + j] * rfactor[0]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-                xv = (int32_t)((((int64_t)src->band_v[i * src_stride + j] * rfactor[1]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-                xd = (int32_t)((((int64_t)src->band_d[i * src_stride + j] * rfactor[2]) +
-                    add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+                xh = (int32_t)((((int64_t)src->band_h[i_offset + j] * rfactor[0]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
+                xv = (int32_t)((((int64_t)src->band_v[i_offset + j] * rfactor[1]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
+                xd = (int32_t)((((int64_t)src->band_d[i_offset + j] * rfactor[2]) +
+                    add_bef_shift_dst_s) >> shift_dst_s);
                 I4_ADM_CM_THRESH_S_I_J(angles, flt_angles, csf_a_stride, &thr, w, h, i, j,
-                                               add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                               add_bef_shift_flt_s, shift_flt_s);
 
                 I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                       add_shift_cub, shift_cub, accum_inner_h);
@@ -1946,14 +2013,14 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
                                       add_shift_cub, shift_cub, accum_inner_d);
             }
             /* j = w-1 */
-            xh = (int32_t)((((int64_t)src->band_h[i * src_stride + w - 1] * rfactor[0]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xv = (int32_t)((((int64_t)src->band_v[i * src_stride + w - 1] * rfactor[1]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xd = (int32_t)((((int64_t)src->band_d[i * src_stride + w - 1] * rfactor[2]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+            xh = (int32_t)((((int64_t)src->band_h[i_offset + w - 1] * rfactor[0]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
+            xv = (int32_t)((((int64_t)src->band_v[i_offset + w - 1] * rfactor[1]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
+            xd = (int32_t)((((int64_t)src->band_d[i_offset + w - 1] * rfactor[2]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
             I4_ADM_CM_THRESH_S_I_W_M_1(angles, flt_angles, csf_a_stride, &thr, w, h, i, (w - 1),
-                                               add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                               add_bef_shift_flt_s, shift_flt_s);
 
             I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                   add_shift_cub, shift_cub, accum_inner_h);
@@ -1971,17 +2038,19 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     accum_inner_v = 0;
     accum_inner_d = 0;
 
+    const int i4_hm1_src_offset = (h - 1) * src_stride;
+
     /* i=h-1,j=0 */
     if ((bottom > (h - 1)) && (left <= 0))
     {
-        xh = (int32_t)((((int64_t)src->band_h[(h - 1) * src_stride] * rfactor[0]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-        xv = (int32_t)((((int64_t)src->band_v[(h - 1) * src_stride] * rfactor[1]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-        xd = (int32_t)((((int64_t)src->band_d[(h - 1) * src_stride] * rfactor[2]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+        xh = (int32_t)((((int64_t)src->band_h[i4_hm1_src_offset] * rfactor[0]) +
+            add_bef_shift_dst_s) >> shift_dst_s);
+        xv = (int32_t)((((int64_t)src->band_v[i4_hm1_src_offset] * rfactor[1]) +
+            add_bef_shift_dst_s) >> shift_dst_s);
+        xd = (int32_t)((((int64_t)src->band_d[i4_hm1_src_offset] * rfactor[2]) +
+            add_bef_shift_dst_s) >> shift_dst_s);
         I4_ADM_CM_THRESH_S_H_M_1_0(angles, flt_angles, csf_a_stride, &thr, w, h, (h - 1), 0,
-                                           add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                           add_bef_shift_flt_s, shift_flt_s);
 
         I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                               add_shift_cub, shift_cub, accum_inner_h);
@@ -1996,14 +2065,14 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     {
         for (j = start_col; j < end_col; ++j)
         {
-            xh = (int32_t)((((int64_t)src->band_h[(h - 1) * src_stride + j] * rfactor[0]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xv = (int32_t)((((int64_t)src->band_v[(h - 1) * src_stride + j] * rfactor[1]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-            xd = (int32_t)((((int64_t)src->band_d[(h - 1) * src_stride + j] * rfactor[2]) +
-                add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+            xh = (int32_t)((((int64_t)src->band_h[i4_hm1_src_offset + j] * rfactor[0]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
+            xv = (int32_t)((((int64_t)src->band_v[i4_hm1_src_offset + j] * rfactor[1]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
+            xd = (int32_t)((((int64_t)src->band_d[i4_hm1_src_offset + j] * rfactor[2]) +
+                add_bef_shift_dst_s) >> shift_dst_s);
             I4_ADM_CM_THRESH_S_H_M_1_J(angles, flt_angles, csf_a_stride, &thr, w, h, (h - 1), j,
-                                               add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                               add_bef_shift_flt_s, shift_flt_s);
 
             I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                                   add_shift_cub, shift_cub, accum_inner_h);
@@ -2017,14 +2086,14 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
     /* i-h-1,j=w-1 */
     if ((bottom > (h - 1)) && (right > (w - 1)))
     {
-        xh = (int32_t)((((int64_t)src->band_h[(h - 1) * src_stride + w - 1] * rfactor[0]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-        xv = (int32_t)((((int64_t)src->band_v[(h - 1) * src_stride + w - 1] * rfactor[1]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
-        xd = (int32_t)((((int64_t)src->band_d[(h - 1) * src_stride + w - 1] * rfactor[2]) +
-            add_bef_shift_dst[scale - 1]) >> shift_dst[scale - 1]);
+        xh = (int32_t)((((int64_t)src->band_h[i4_hm1_src_offset + w - 1] * rfactor[0]) +
+            add_bef_shift_dst_s) >> shift_dst_s);
+        xv = (int32_t)((((int64_t)src->band_v[i4_hm1_src_offset + w - 1] * rfactor[1]) +
+            add_bef_shift_dst_s) >> shift_dst_s);
+        xd = (int32_t)((((int64_t)src->band_d[i4_hm1_src_offset + w - 1] * rfactor[2]) +
+            add_bef_shift_dst_s) >> shift_dst_s);
         I4_ADM_CM_THRESH_S_H_M_1_W_M_1(angles, flt_angles, csf_a_stride, &thr, w, h, (h - 1),
-                                               (w - 1), add_bef_shift_flt[scale - 1], shift_flt[scale - 1]);
+                                               (w - 1), add_bef_shift_flt_s, shift_flt_s);
 
         I4_ADM_CM_ACCUM_ROUND(xh, thr, shift_sub, xh_sq, add_shift_sq, shift_sq, val,
                               add_shift_cub, shift_cub, accum_inner_h);
@@ -2041,31 +2110,22 @@ static float i4_adm_cm(AdmBuffer *buf, int w, int h, int src_stride, int csf_a_s
      * Converted to floating-point for calculating the final scores
      * Final shifts is calculated from 3*(shifts_from_previous_stage(i.e src comes from dwt)+32)-total_shifts_done_in_this_function
      */
-    float f_accum_h = (float)(accum_h / final_shift[scale - 1]);
-    float f_accum_v = (float)(accum_v / final_shift[scale - 1]);
-    float f_accum_d = (float)(accum_d / final_shift[scale - 1]);
+    float f_accum_h = (float)(accum_h / final_shift[scale_idx]);
+    float f_accum_v = (float)(accum_v / final_shift[scale_idx]);
+    float f_accum_d = (float)(accum_d / final_shift[scale_idx]);
 
-    float num_scale_h = powf(f_accum_h, 1.0f / 3.0f) + powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
-    float num_scale_v = powf(f_accum_v, 1.0f / 3.0f) + powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
-    float num_scale_d = powf(f_accum_d, 1.0f / 3.0f) + powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
+    const float powf_add = powf((bottom - top) * (right - left) / 32.0f, 1.0f / 3.0f);
+    float num_scale_h = powf(f_accum_h, 1.0f / 3.0f) + powf_add;
+    float num_scale_v = powf(f_accum_v, 1.0f / 3.0f) + powf_add;
+    float num_scale_d = powf(f_accum_d, 1.0f / 3.0f) + powf_add;
 
     return (num_scale_h + num_scale_v + num_scale_d);
 }
 
-static void i16_to_i32(adm_dwt_band_t *src, i4_adm_dwt_band_t *dst,
-                       int w, int h, int stride)
-{
-    for (int i = 0; i < (h + 1) / 2; ++i) {
-        int16_t *src_band_a_addr = &src->band_a[i * stride];
-        int32_t *dst_band_a_addr = &dst->band_a[i * stride];
-        for (int j = 0; j < (w + 1) / 2; ++j) {
-            *(dst_band_a_addr++) = (int32_t)(*(src_band_a_addr++));
-        }
-    }
-}
+/* i16_to_i32 removed: conversion now merged into adm_dwt2_s1_combined */
 
-static void adm_dwt2_8(const uint8_t *src, const adm_dwt_band_t *dst,
-                       AdmBuffer *buf, int w, int h, int src_stride,
+static void adm_dwt2_8(const uint8_t *RESTRICT src, const adm_dwt_band_t *RESTRICT dst,
+                       AdmBuffer *RESTRICT buf, int w, int h, int src_stride,
                        int dst_stride)
 {
     const int16_t *filter_lo = dwt2_db2_coeffs_lo;
@@ -2162,7 +2222,8 @@ static void adm_dwt2_8(const uint8_t *src, const adm_dwt_band_t *dst,
     }
 }
 
-static void adm_dwt2_16(const uint16_t *src, const adm_dwt_band_t *dst, AdmBuffer *buf, int w, int h,
+static void adm_dwt2_16(const uint16_t *RESTRICT src, const adm_dwt_band_t *RESTRICT dst,
+                        AdmBuffer *RESTRICT buf, int w, int h,
                         int src_stride, int dst_stride, int inp_size_bits)
 {
     const int16_t *filter_lo = dwt2_db2_coeffs_lo;
@@ -2259,9 +2320,11 @@ static void adm_dwt2_16(const uint16_t *src, const adm_dwt_band_t *dst, AdmBuffe
     }
 }
 
-static void adm_dwt2_s123_combined(const int32_t *i4_ref_scale, const int32_t *i4_curr_dis,
-                                   AdmBuffer *buf, int w, int h, int ref_stride,
-                                   int dis_stride, int dst_stride, int scale)
+static void adm_dwt2_s123_combined(const int32_t *RESTRICT i4_ref_scale,
+                                   const int32_t *RESTRICT i4_curr_dis,
+                                   AdmBuffer *RESTRICT buf, int w, int h,
+                                   int ref_stride, int dis_stride,
+                                   int dst_stride, int scale)
 {
     const i4_adm_dwt_band_t *i4_ref_dwt2 = &buf->i4_ref_dwt2;
     const i4_adm_dwt_band_t *i4_dis_dwt2 = &buf->i4_dis_dwt2;
@@ -2422,9 +2485,181 @@ static void adm_dwt2_s123_combined(const int32_t *i4_ref_scale, const int32_t *i
     }
 }
 
+
+/**
+ * Specialized DWT for scale==1 that reads directly from int16_t input,
+ * eliminating the need for a separate i16_to_i32 conversion pass.
+ * The vertical pass widens int16 to int32 inline during the filter
+ * computation, saving one full read+write pass over the data.
+ *
+ * For scale==1: shift_VP=0, add_VP=0, shift_HP=15, add_HP=16384
+ */
+static void adm_dwt2_s1_combined(const int16_t *i2_ref_scale,
+                                 const int16_t *i2_dis_scale,
+                                 AdmBuffer *buf, int w, int h,
+                                 int ref_stride, int dis_stride,
+                                 int dst_stride)
+{
+    const i4_adm_dwt_band_t *i4_ref_dwt2 = &buf->i4_ref_dwt2;
+    const i4_adm_dwt_band_t *i4_dis_dwt2 = &buf->i4_dis_dwt2;
+    int **ind_y = buf->ind_y;
+    int **ind_x = buf->ind_x;
+
+    const int16_t *filter_lo = dwt2_db2_coeffs_lo;
+    const int16_t *filter_hi = dwt2_db2_coeffs_hi;
+
+    /* Scale 1 constants: VP shift=0, HP shift=15, HP round=16384 */
+    const int32_t add_bef_shift_round_HP = 16384;
+    const int16_t shift_HP = 15;
+
+    int32_t *tmplo_ref = buf->tmp_ref;
+    int32_t *tmphi_ref = tmplo_ref + w;
+    int32_t *tmplo_dis = tmphi_ref + w;
+    int32_t *tmphi_dis = tmplo_dis + w;
+    int32_t s10, s11, s12, s13;
+
+    int64_t accum_ref;
+
+    for (int i = 0; i < (h + 1) / 2; ++i)
+    {
+        /* Vertical pass - reads int16_t, widens to int32_t inline. */
+        for (int j = 0; j < w; ++j)
+        {
+            /* Widen i16 to i32 during load (zero-cost sign extension). */
+            s10 = (int32_t)i2_ref_scale[ind_y[0][i] * ref_stride + j];
+            s11 = (int32_t)i2_ref_scale[ind_y[1][i] * ref_stride + j];
+            s12 = (int32_t)i2_ref_scale[ind_y[2][i] * ref_stride + j];
+            s13 = (int32_t)i2_ref_scale[ind_y[3][i] * ref_stride + j];
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            /* shift_VP=0 for scale 1, so no shift needed */
+            tmplo_ref[j] = (int32_t)accum_ref;
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            tmphi_ref[j] = (int32_t)accum_ref;
+
+            s10 = (int32_t)i2_dis_scale[ind_y[0][i] * dis_stride + j];
+            s11 = (int32_t)i2_dis_scale[ind_y[1][i] * dis_stride + j];
+            s12 = (int32_t)i2_dis_scale[ind_y[2][i] * dis_stride + j];
+            s13 = (int32_t)i2_dis_scale[ind_y[3][i] * dis_stride + j];
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            tmplo_dis[j] = (int32_t)accum_ref;
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            tmphi_dis[j] = (int32_t)accum_ref;
+        }
+        /* Horizontal pass (lo and hi). */
+        for (int j = 0; j < (w + 1) / 2; ++j)
+        {
+            int j0 = ind_x[0][j];
+            int j1 = ind_x[1][j];
+            int j2 = ind_x[2][j];
+            int j3 = ind_x[3][j];
+
+            s10 = tmplo_ref[j0];
+            s11 = tmplo_ref[j1];
+            s12 = tmplo_ref[j2];
+            s13 = tmplo_ref[j3];
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            i4_ref_dwt2->band_a[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            i4_ref_dwt2->band_v[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            s10 = tmphi_ref[j0];
+            s11 = tmphi_ref[j1];
+            s12 = tmphi_ref[j2];
+            s13 = tmphi_ref[j3];
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            i4_ref_dwt2->band_h[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            i4_ref_dwt2->band_d[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            s10 = tmplo_dis[j0];
+            s11 = tmplo_dis[j1];
+            s12 = tmplo_dis[j2];
+            s13 = tmplo_dis[j3];
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            i4_dis_dwt2->band_a[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            i4_dis_dwt2->band_v[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            s10 = tmphi_dis[j0];
+            s11 = tmphi_dis[j1];
+            s12 = tmphi_dis[j2];
+            s13 = tmphi_dis[j3];
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_lo[0] * s10;
+            accum_ref += (int64_t)filter_lo[1] * s11;
+            accum_ref += (int64_t)filter_lo[2] * s12;
+            accum_ref += (int64_t)filter_lo[3] * s13;
+            i4_dis_dwt2->band_h[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+
+            accum_ref = 0;
+            accum_ref += (int64_t)filter_hi[0] * s10;
+            accum_ref += (int64_t)filter_hi[1] * s11;
+            accum_ref += (int64_t)filter_hi[2] * s12;
+            accum_ref += (int64_t)filter_hi[3] * s13;
+            i4_dis_dwt2->band_d[i * dst_stride + j] = (int32_t)((accum_ref +
+                add_bef_shift_round_HP) >> shift_HP);
+        }
+    }
+}
+
 void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic,
                          double *score, double *score_num, double *score_den, double *scores, AdmBuffer *buf,
                          double adm_enhn_gain_limit,
+                         const float csf_factors[4][2],
                          double adm_norm_view_dist, int adm_ref_display_height)
 {
     int w = ref_pic->w[0];
@@ -2469,40 +2704,66 @@ void integer_compute_adm(AdmState *s, VmafPicture *ref_pic, VmafPicture *dis_pic
                             curr_dis_stride, buf_stride, dis_pic->bpc);
             }
 
-			i16_to_i32(&buf->ref_dwt2, &buf->i4_ref_dwt2, w, h, buf_stride);
-			i16_to_i32(&buf->dis_dwt2, &buf->i4_dis_dwt2, w, h, buf_stride);
+			/* i16_to_i32 conversion is deferred: adm_dwt2_s1_combined
+			 * at scale==1 reads directly from i16 band_a, performing
+			 * the widening inline during its vertical pass. */
 
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
 
-			adm_decouple(buf, w, h, buf_stride, adm_enhn_gain_limit);
+			s->adm_decouple(buf, w, h, buf_stride, adm_enhn_gain_limit, div_lookup);
 
-			den_scale = adm_csf_den_scale(&buf->ref_dwt2, w, h, buf_stride,
-                                 adm_norm_view_dist, adm_ref_display_height);
+			den_scale = s->adm_csf_den_scale_func(&buf->ref_dwt2, w, h, buf_stride,
+                                 csf_factors);
 
-			adm_csf(buf, w, h, buf_stride, adm_norm_view_dist, adm_ref_display_height);
+			adm_csf(buf, w, h, buf_stride, csf_factors,
+                    adm_norm_view_dist, adm_ref_display_height, s->adm_csf_func);
 
-			num_scale = adm_cm(buf, w, h, buf_stride, buf_stride,
+			num_scale = s->adm_cm_func(buf, w, h, buf_stride, buf_stride,
+                               csf_factors,
                                adm_norm_view_dist, adm_ref_display_height);
 		}
-		else {
-            adm_dwt2_s123_combined(i4_curr_ref_scale, i4_curr_dis_scale, buf, w, h, curr_ref_stride,
-                                   curr_dis_stride, buf_stride, scale);
+		else if(scale==1) {
+			/* Scale 1: read directly from i16 band_a (from scale 0 DWT),
+			 * merging the i16-to-i32 conversion into the DWT vertical pass.
+			 * This eliminates the separate i16_to_i32 conversion pass. */
+            s->dwt2_s1_combined(buf->ref_dwt2.band_a, buf->dis_dwt2.band_a,
+                                buf, w, h, curr_ref_stride,
+                                curr_dis_stride, buf_stride);
 
 			w = (w + 1) / 2;
 			h = (h + 1) / 2;
 
-			adm_decouple_s123(buf, w, h, buf_stride, adm_enhn_gain_limit);
+			s->adm_decouple_s123_func(buf, w, h, buf_stride, adm_enhn_gain_limit);
 
-			den_scale = adm_csf_den_s123(
+			den_scale = s->adm_csf_den_s123_func(
 			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
-			        adm_norm_view_dist, adm_ref_display_height);
+			        csf_factors);
 
-			i4_adm_csf(buf, scale, w, h, buf_stride,
-              adm_norm_view_dist, adm_ref_display_height);
+			s->i4_adm_csf_func(buf, scale, w, h, buf_stride,
+              csf_factors);
 
-			num_scale = i4_adm_cm(buf, w, h, buf_stride, buf_stride, scale,
-                         adm_norm_view_dist, adm_ref_display_height);
+			num_scale = s->i4_adm_cm_func(buf, w, h, buf_stride, buf_stride, scale,
+                         csf_factors);
+		}
+		else {
+            s->dwt2_s123_combined(i4_curr_ref_scale, i4_curr_dis_scale, buf, w, h, curr_ref_stride,
+                                  curr_dis_stride, buf_stride, scale);
+
+			w = (w + 1) / 2;
+			h = (h + 1) / 2;
+
+			s->adm_decouple_s123_func(buf, w, h, buf_stride, adm_enhn_gain_limit);
+
+			den_scale = s->adm_csf_den_s123_func(
+			        &buf->i4_ref_dwt2, scale, w, h, buf_stride,
+			        csf_factors);
+
+			s->i4_adm_csf_func(buf, scale, w, h, buf_stride,
+              csf_factors);
+
+			num_scale = s->i4_adm_cm_func(buf, w, h, buf_stride, buf_stride, scale,
+                         csf_factors);
 		}
 
 		num += num_scale;
@@ -2593,11 +2854,37 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
     }
 
     s->dwt2_8 = adm_dwt2_8;
+    s->adm_decouple = adm_decouple;
+    s->adm_decouple_s123_func = adm_decouple_s123;
+    s->adm_csf_func = adm_csf_inner;
+    s->adm_cm_func = adm_cm;
+    s->i4_adm_cm_func = i4_adm_cm;
+    s->i4_adm_csf_func = i4_adm_csf;
+    s->adm_csf_den_s123_func = adm_csf_den_s123;
+    s->adm_csf_den_scale_func = adm_csf_den_scale;
+    s->dwt2_s1_combined = adm_dwt2_s1_combined;
+    s->dwt2_s123_combined = adm_dwt2_s123_combined;
 
 #if ARCH_X86
     unsigned flags = vmaf_get_cpu_flags();
     if (flags & VMAF_X86_CPU_FLAG_AVX2) {
         if (!(w % 8)) s->dwt2_8 = adm_dwt2_8_avx2;
+        /* TODO: re-enable after fixing precision regression (test_precision_differential
+         * reports adm2_score delta of 0.765 on gradient_vs_random42 synthetic input).
+         * Precision test passes on ARM (C reference) but fails on x86 (AVX2).
+         * Disabling all untested AVX2 ADM dispatches until bugs are isolated.
+         *
+         * s->dwt2_s1_combined = adm_dwt2_s1_combined_avx2;
+         * s->dwt2_s123_combined = adm_dwt2_s123_combined_avx2;
+         * s->adm_decouple = adm_decouple_avx2;
+         * s->adm_decouple_s123_func = adm_decouple_s123_avx2;
+         * s->adm_csf_func = adm_csf_avx2;
+         * s->adm_cm_func = adm_cm_avx2;
+         * s->i4_adm_cm_func = i4_adm_cm_avx2;
+         * s->i4_adm_csf_func = i4_adm_csf_avx2;
+         * s->adm_csf_den_s123_func = adm_csf_den_s123_avx2;
+         * s->adm_csf_den_scale_func = adm_csf_den_scale_avx2;
+         */
     }
 #elif ARCH_AARCH64
     unsigned flags = vmaf_get_cpu_flags();
@@ -2642,6 +2929,18 @@ static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
 
     div_lookup_generator();
 
+    // Precompute CSF (Contrast Sensitivity Function) coefficients.
+    // These depend only on adm_norm_view_dist and adm_ref_display_height,
+    // which are constant across all frames.
+    for (int scale = 0; scale < 4; ++scale) {
+        s->csf_factors[scale][0] = dwt_quant_step(
+            &dwt_7_9_YCbCr_threshold[0], scale, 1,
+            s->adm_norm_view_dist, s->adm_ref_display_height);
+        s->csf_factors[scale][1] = dwt_quant_step(
+            &dwt_7_9_YCbCr_threshold[0], scale, 2,
+            s->adm_norm_view_dist, s->adm_ref_display_height);
+    }
+
     s->feature_name_dict =
         vmaf_feature_name_dict_from_provided_features(fex->provided_features,
                 fex->options, s);
@@ -2682,6 +2981,7 @@ static int extract(VmafFeatureExtractor *fex,
     integer_compute_adm(s, ref_pic, dist_pic, &score, &score_num, &score_den,
                         scores, &s->buf,
                         s->adm_enhn_gain_limit,
+                        s->csf_factors,
                         s->adm_norm_view_dist, s->adm_ref_display_height);
 
     err |= vmaf_feature_collector_append_with_dict(feature_collector,

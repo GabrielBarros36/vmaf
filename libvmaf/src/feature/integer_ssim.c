@@ -26,10 +26,16 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
+#include "cpu.h"
 #include "feature_collector.h"
 #include "feature_extractor.h"
+
+#if ARCH_X86
+#include "x86/ssim_avx2.h"
+#endif
 
 #define KERNEL_SHIFT (8)
 #define KERNEL_WEIGHT (1<<KERNEL_SHIFT)
@@ -82,11 +88,57 @@ struct ssim_moments{
   int64_t w;
 };
 
+/* Function pointer type for horizontal convolution of SSIM moments (8-bit) */
+typedef void (*ssim_hconv_8_func)(const uint8_t *src, const uint8_t *dst,
+                                  int64_t *buf_mux, int64_t *buf_muy,
+                                  int64_t *buf_x2, int64_t *buf_xy,
+                                  int64_t *buf_y2, int64_t *buf_w,
+                                  int w, const unsigned *hkernel,
+                                  int hkernel_sz);
+
+typedef struct SsimState {
+    ssim_hconv_8_func hconv_8;
+} SsimState;
+
+/* Scalar reference implementation of horizontal moment convolution for 8-bit */
+static void ssim_hconv_8_c(const uint8_t *src, const uint8_t *dst,
+                            int64_t *buf_mux, int64_t *buf_muy,
+                            int64_t *buf_x2, int64_t *buf_xy,
+                            int64_t *buf_y2, int64_t *buf_w,
+                            int w, const unsigned *hkernel, int hkernel_sz)
+{
+    int hkernel_offs = hkernel_sz >> 1;
+    for (int x = 0; x < w; x++) {
+        int k_min = hkernel_offs - x <= 0 ? 0 : hkernel_offs - x;
+        int k_max = x + hkernel_offs - w + 1 <= 0
+                        ? hkernel_sz : hkernel_sz - (x + hkernel_offs - w + 1);
+        int64_t mux = 0, muy = 0, x2 = 0, xy = 0, y2 = 0, wt = 0;
+        for (int k = k_min; k < k_max; k++) {
+            int s = src[x - hkernel_offs + k];
+            int d = dst[x - hkernel_offs + k];
+            int window = (int)hkernel[k];
+            mux += window * s;
+            muy += window * d;
+            x2  += window * s * s;
+            xy  += window * s * d;
+            y2  += window * d * d;
+            wt  += window;
+        }
+        buf_mux[x] = mux;
+        buf_muy[x] = muy;
+        buf_x2[x]  = x2;
+        buf_xy[x]  = xy;
+        buf_y2[x]  = y2;
+        buf_w[x]   = wt;
+    }
+}
+
 #define SSIM_K1 (0.01*0.01)
 #define SSIM_K2 (0.03*0.03)
 
 static double calc_ssim(const unsigned char *_src,int _systride,
- const unsigned char *_dst,int _dystride,double _par,int depth,int _w,int _h){
+ const unsigned char *_dst,int _dystride,double _par,int depth,int _w,int _h,
+ ssim_hconv_8_func hconv_8){
   ssim_moments  *line_buf;
   ssim_moments **lines;
   double         ssim;
@@ -103,6 +155,17 @@ static double calc_ssim(const unsigned char *_src,int _systride,
   int            x;
   int            y;
   int            samplemax;
+
+  /* Temporary arrays for the vectorized horizontal convolution path */
+  int64_t *tmp_mux = NULL;
+  int64_t *tmp_muy = NULL;
+  int64_t *tmp_x2  = NULL;
+  int64_t *tmp_xy  = NULL;
+  int64_t *tmp_y2  = NULL;
+  int64_t *tmp_w   = NULL;
+
+  (void) _par;
+
   samplemax = (1 << depth) - 1;
   vkernel_sz=gaussian_filter_init(&vkernel,1.5,5);
   vkernel_offs=vkernel_sz>>1;
@@ -113,6 +176,17 @@ static double calc_ssim(const unsigned char *_src,int _systride,
   for(y=1;y<line_sz;y++)lines[y]=lines[y-1]+_w;
   hkernel_sz=gaussian_filter_init(&hkernel,1.5,5);
   hkernel_offs=hkernel_sz>>1;
+
+  /* Allocate temporary arrays for vectorized horizontal convolution */
+  if (depth <= 8 && hconv_8) {
+    tmp_mux = (int64_t *)malloc(_w * sizeof(int64_t));
+    tmp_muy = (int64_t *)malloc(_w * sizeof(int64_t));
+    tmp_x2  = (int64_t *)malloc(_w * sizeof(int64_t));
+    tmp_xy  = (int64_t *)malloc(_w * sizeof(int64_t));
+    tmp_y2  = (int64_t *)malloc(_w * sizeof(int64_t));
+    tmp_w   = (int64_t *)malloc(_w * sizeof(int64_t));
+  }
+
   ssim=0;
   ssimw=0;
   for(y=0;y<_h+vkernel_offs;y++){
@@ -122,34 +196,48 @@ static double calc_ssim(const unsigned char *_src,int _systride,
     int           k_max;
     if(y<_h){
       buf=lines[y&line_mask];
-      for(x=0;x<_w;x++){
-        ssim_moments m;
-        memset(&m,0,sizeof(m));
-        k_min=hkernel_offs-x<=0?0:hkernel_offs-x;
-        k_max=x+hkernel_offs-_w+1<=0?
-         hkernel_sz:hkernel_sz-(x+hkernel_offs-_w+1);
-        for(k=k_min;k<k_max;k++){
-          signed s;
-          signed d;
-          signed window;
-          if (depth > 8) {
-            s = _src[(x-hkernel_offs+k)*2] +
-             (_src[(x-hkernel_offs+k)*2 + 1] << 8);
-            d = _dst[(x-hkernel_offs+k)*2] +
-             (_dst[(x-hkernel_offs+k)*2 + 1] << 8);
-          } else {
-            s=_src[(x-hkernel_offs+k)];
-            d=_dst[(x-hkernel_offs+k)];
-          }
-          window=hkernel[k];
-          m.mux+=window*s;
-          m.muy+=window*d;
-          m.x2+=window*s*s;
-          m.xy+=window*s*d;
-          m.y2+=window*d*d;
-          m.w+=window;
+      if (depth <= 8 && hconv_8 && tmp_mux) {
+        /* Use the (possibly AVX2-accelerated) horizontal convolution */
+        hconv_8(_src, _dst, tmp_mux, tmp_muy, tmp_x2, tmp_xy, tmp_y2, tmp_w,
+                _w, hkernel, hkernel_sz);
+        for(x=0;x<_w;x++){
+          buf[x].mux = tmp_mux[x];
+          buf[x].muy = tmp_muy[x];
+          buf[x].x2  = tmp_x2[x];
+          buf[x].xy  = tmp_xy[x];
+          buf[x].y2  = tmp_y2[x];
+          buf[x].w   = tmp_w[x];
         }
-        *(buf+x)=*&m;
+      } else {
+        for(x=0;x<_w;x++){
+          ssim_moments m;
+          memset(&m,0,sizeof(m));
+          k_min=hkernel_offs-x<=0?0:hkernel_offs-x;
+          k_max=x+hkernel_offs-_w+1<=0?
+           hkernel_sz:hkernel_sz-(x+hkernel_offs-_w+1);
+          for(k=k_min;k<k_max;k++){
+            signed s;
+            signed d;
+            signed window;
+            if (depth > 8) {
+              s = _src[(x-hkernel_offs+k)*2] +
+               (_src[(x-hkernel_offs+k)*2 + 1] << 8);
+              d = _dst[(x-hkernel_offs+k)*2] +
+               (_dst[(x-hkernel_offs+k)*2 + 1] << 8);
+            } else {
+              s=_src[(x-hkernel_offs+k)];
+              d=_dst[(x-hkernel_offs+k)];
+            }
+            window=hkernel[k];
+            m.mux+=window*s;
+            m.muy+=window*d;
+            m.x2+=window*s*s;
+            m.xy+=window*s*d;
+            m.y2+=window*d*d;
+            m.w+=window;
+          }
+          *(buf+x)=*&m;
+        }
       }
       _src+=_systride;
       _dst+=_dystride;
@@ -189,6 +277,12 @@ static double calc_ssim(const unsigned char *_src,int _systride,
       }
     }
   }
+  free(tmp_mux);
+  free(tmp_muy);
+  free(tmp_x2);
+  free(tmp_xy);
+  free(tmp_y2);
+  free(tmp_w);
   free(line_buf);
   free(lines);
   free(vkernel);
@@ -199,6 +293,21 @@ static double calc_ssim(const unsigned char *_src,int _systride,
 static int init(VmafFeatureExtractor *fex, enum VmafPixelFormat pix_fmt,
                 unsigned bpc, unsigned w, unsigned h)
 {
+    (void) pix_fmt;
+    (void) bpc;
+    (void) w;
+    (void) h;
+
+    SsimState *s = fex->priv;
+
+    s->hconv_8 = ssim_hconv_8_c;
+
+#if ARCH_X86
+    unsigned flags = vmaf_get_cpu_flags();
+    if (flags & VMAF_X86_CPU_FLAG_AVX2)
+        s->hconv_8 = ssim_hconv_8_avx2;
+#endif
+
     return 0;
 }
 
@@ -207,13 +316,15 @@ static int extract(VmafFeatureExtractor *fex,
                    VmafPicture *dist_pic, VmafPicture *dist_pic_90,
                    unsigned index, VmafFeatureCollector *feature_collector)
 {
+    SsimState *s = fex->priv;
+
     (void) ref_pic_90;
     (void) dist_pic_90;
 
     double score =
         calc_ssim(ref_pic->data[0], ref_pic->stride[0],
                   dist_pic->data[0], dist_pic->stride[0], 1.0, ref_pic->bpc,
-                  ref_pic->w[0], ref_pic->h[0]);
+                  ref_pic->w[0], ref_pic->h[0], s->hconv_8);
     int err =
         vmaf_feature_collector_append(feature_collector, "ssim", score, index);
     if (err) return err;
@@ -222,6 +333,7 @@ static int extract(VmafFeatureExtractor *fex,
 
 static int close(VmafFeatureExtractor *fex)
 {
+    (void) fex;
     return 0;
 }
 
@@ -235,5 +347,6 @@ VmafFeatureExtractor vmaf_fex_ssim = {
     .init = init,
     .extract = extract,
     .close = close,
+    .priv_size = sizeof(SsimState),
     .provided_features = provided_features,
 };

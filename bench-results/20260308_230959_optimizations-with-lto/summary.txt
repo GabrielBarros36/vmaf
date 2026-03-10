@@ -1,0 +1,90 @@
+VMAF Benchmark Summary
+======================
+
+Label:   optimizations-with-lto
+Date:    20260308_230959
+
+--- Machine State ---
+timestamp:    2026-03-08T23:10:09Z
+hostname:     ip-172-31-46-90
+kernel:       6.17.0-1007-aws
+cpu:          AMD EPYC 7R13 48-Core Processor
+logical_cpus: 192
+numa_nodes:   4
+governor:     performance
+cpu_freq_mhz: 2650.000
+boost:        0
+aslr:         0
+thp:          always
+perf_paranoid:-1
+avx_flags:    avx avx2 
+loadavg_1m:   3.17
+vmaf_commit:  332dde62838d91d8b5216e9822de58851f2fd64f
+
+--- Timing and Hardware Counters (7 runs, mean ± stddev) ---
+    28,123,363,063      cycles                                                                  ( +-  0.05% )
+    88,726,219,972      instructions                     #    3.15  insn per cycle              ( +-  0.01% )
+     2,305,176,622      cache-references                                                        ( +-  0.26% )
+       264,744,280      cache-misses                     #   11.48% of all cache refs           ( +-  1.60% )
+        72,379,215      branch-misses                                                           ( +-  0.11% )
+           2.64734 +- 0.00229 seconds time elapsed  ( +-  0.09% )
+
+--- Top CPU Hotspots ---
+    97.80%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff7929c6c
+            |
+            ---0x7ffff7929c6c
+               |          
+                --97.80%--0x7ffff789caa4
+                          vmaf_thread_pool_runner
+                          |          
+                           --97.70%--threaded_extract_func
+                                     |          
+                                      --97.61%--vmaf_feature_extractor_context_extract
+                                                |          
+                                                |--61.16%--extract
+                                                |          |          
+                                                |          |--42.38%--vif_statistic_8_avx2
+                                                |          |          
+                                                |          |--14.12%--vif_statistic_16_avx2
+                                                |          |          
+                                                |          |--4.18%--vif_subsample_rd_8_avx2
+                                                |          |          
+                                                |           --0.48%--vif_subsample_rd_16_avx2
+                                                |          
+                                                |--32.75%--extract
+                                                |          integer_compute_adm
+                                                |          |          
+                                                |          |--5.56%--adm_dwt2_s1_combined
+                                                |          |          
+                                                |          |--4.11%--adm_decouple_s123
+                                                |          |          |          
+                                                |          |           --0.31%--asm_exc_page_fault
+                                                |          |                     exc_page_fault
+                                                |          |                     do_user_addr_fault
+                                                |          |                     handle_mm_fault
+                                                |          |                     __handle_mm_fault
+                                                |          |                     do_huge_pmd_anonymous_page
+                                                |          |                     __do_huge_pmd_anonymous_page
+                                                |          |                     vma_alloc_anon_folio_pmd
+                                                |          |                     vma_alloc_folio_noprof
+                                                |          |                     alloc_pages_mpol
+                                                |          |                     __alloc_frozen_pages_noprof
+                                                |          |                     get_page_from_freelist
+                                                |          |                     clear_page_rep
+                                                |          |          
+                                                |          |--2.37%--adm_dwt2_s123_combined
+                                                |          |          
+                                                |          |--2.33%--adm_dwt2_8_avx2
+                                                |          |          
+                                                |           --2.06%--i4_adm_cm
+                                                |          
+                                                 --3.21%--extract
+                                                           |          
+
+--- Result Files ---
+  /root/Development/vmaf/bench-results/20260308_230959_optimizations-with-lto/
+  ├── env.txt          machine state
+  ├── perf-stat.txt    raw perf stat output (timing + hw counters)
+  ├── perf-report.txt  per-function hotspots
+  ├── flamegraph.svg   open in browser for interactive call tree
+  └── summary.txt      this file
