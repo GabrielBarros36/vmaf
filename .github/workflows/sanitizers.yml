@@ -150,7 +150,7 @@ jobs:
       CC: clang
       CXX: clang++
       TSAN_OPTIONS: >-
-        halt_on_error=1:second_deadlock_stack=1:history_size=4:suppressions=${{ github.workspace }}/libvmaf/test/sanitizers/tsan.supp
+        halt_on_error=1:second_deadlock_stack=1:history_size=4:allocator_may_return_null=1:suppressions=${{ github.workspace }}/libvmaf/test/sanitizers/tsan.supp
     steps:
       - name: Setup python
         uses: actions/setup-python@v6
