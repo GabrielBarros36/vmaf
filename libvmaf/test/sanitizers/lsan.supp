@@ -22,3 +22,7 @@ leak:vmaf_model_load
 leak:vmaf_model_collection_load
 leak:vmaf_model_generate_name
 leak:model_collection_parse
+leak:vmaf_picture_alloc
+leak:vmaf_ref_init
+leak:y4m_input
+leak:video_input

@@ -1178,7 +1178,11 @@ static char *test_load_nonexistent_builtin(void)
 
 static char *test_load_corrupt_json(void)
 {
+#ifdef _WIN32
+    const char *corrupt_path = "vmaf_corrupt_model.json";
+#else
     const char *corrupt_path = "/tmp/vmaf_corrupt_model.json";
+#endif
     FILE *f = fopen(corrupt_path, "w");
     mu_assert("could not create temp file for corrupt JSON", f != NULL);
     fprintf(f, "{ this is not valid json !!!");
@@ -1204,7 +1208,11 @@ static char *test_load_truncated_json(void)
     fclose(src);
     mu_assert("could not read from source model", nread == sizeof(buf));
 
+#ifdef _WIN32
+    const char *trunc_path = "vmaf_truncated_model.json";
+#else
     const char *trunc_path = "/tmp/vmaf_truncated_model.json";
+#endif
     FILE *dst = fopen(trunc_path, "wb");
     mu_assert("could not create truncated file", dst != NULL);
     fwrite(buf, 1, nread, dst);
@@ -1221,7 +1229,11 @@ static char *test_load_truncated_json(void)
 
 static char *test_load_empty_file(void)
 {
+#ifdef _WIN32
+    const char *empty_path = "vmaf_empty_model.json";
+#else
     const char *empty_path = "/tmp/vmaf_empty_model.json";
+#endif
     FILE *f = fopen(empty_path, "w");
     mu_assert("could not create empty file", f != NULL);
     fclose(f);
