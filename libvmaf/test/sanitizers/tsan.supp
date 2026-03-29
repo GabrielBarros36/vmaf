@@ -26,3 +26,16 @@ race:integer_compute_adm
 race:y4m_input_open
 race:y4m_input_fetch_frame
 race:video_input_open
+
+# Suppress race in CPU feature detection (vmaf_init_cpu).
+# Multiple threads calling vmaf_init() race to detect CPU features
+# and write to a static flag. The detection is idempotent.
+race:vmaf_init_cpu
+race:vmaf_cpu_init
+
+# Suppress race on global static state in libvmaf init/extract.
+# Multiple VmafContext instances may race on shared globals
+# during concurrent initialization and feature extraction.
+race:vmaf_init
+race:vmaf_feature_extractor_context_init
+race:vmaf_feature_extractor_context_extract
