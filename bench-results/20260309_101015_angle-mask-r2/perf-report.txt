@@ -1,0 +1,1175 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 831  of event 'cpu-clock'
+# Event count (approx.): 8393939310
+#
+# Children      Self       Samples  Command  Shared Object      Symbol                                    
+# ........  ........  ............  .......  .................  ..........................................
+#
+    95.43%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff7894ac3
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               |          
+               |--71.60%--extract
+               |          |          
+               |          |--46.57%--vif_statistic_8_avx2
+               |          |          
+               |          |--17.81%--vif_statistic_16_avx2
+               |          |          
+               |          |--6.26%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --0.96%--vif_subsample_rd_16_avx2
+               |          
+               |--19.37%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--3.97%--adm_decouple_avx2
+               |          |          
+               |          |--3.25%--adm_decouple_s123_avx2
+               |          |          
+               |          |--3.13%--adm_dwt2_8_avx2
+               |          |          
+               |          |--2.65%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--1.93%--adm_cm_avx2
+               |          |          
+               |          |--1.20%--i4_adm_cm_avx2
+               |          |          
+               |          |--1.08%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--0.84%--adm_csf_avx2
+               |          |          
+               |          |--0.60%--adm_csf_den_s123_avx2
+               |          |          
+               |           --0.48%--i4_adm_csf_avx2
+               |          
+               |--2.89%--extract
+               |          |          
+               |          |--1.20%--y_convolution_8_avx2
+               |          |          
+               |          |--1.20%--x_convolution_16_avx2
+               |          |          
+               |           --0.48%--sad_avx2_wrapper
+               |                     sad_avx2
+               |          
+               |--0.48%--0x7ffff79a09f1
+               |          
+               |--0.36%--vmaf_feature_extractor_context_init
+               |          0x7ffff79a10c9
+               |          asm_exc_page_fault
+               |          exc_page_fault
+               |          do_user_addr_fault
+               |          handle_mm_fault
+               |          __handle_mm_fault
+               |          
+                --0.36%--0x7ffff79a0a24
+
+    95.43%     0.00%             0  vmaf     vmaf               [.] vmaf_thread_pool_runner
+            |
+            ---vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               |          
+               |--71.60%--extract
+               |          |          
+               |          |--46.57%--vif_statistic_8_avx2
+               |          |          
+               |          |--17.81%--vif_statistic_16_avx2
+               |          |          
+               |          |--6.26%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --0.96%--vif_subsample_rd_16_avx2
+               |          
+               |--19.37%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--3.97%--adm_decouple_avx2
+               |          |          
+               |          |--3.25%--adm_decouple_s123_avx2
+               |          |          
+               |          |--3.13%--adm_dwt2_8_avx2
+               |          |          
+               |          |--2.65%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--1.93%--adm_cm_avx2
+               |          |          
+               |          |--1.20%--i4_adm_cm_avx2
+               |          |          
+               |          |--1.08%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--0.84%--adm_csf_avx2
+               |          |          
+               |          |--0.60%--adm_csf_den_s123_avx2
+               |          |          
+               |           --0.48%--i4_adm_csf_avx2
+               |          
+               |--2.89%--extract
+               |          |          
+               |          |--1.20%--y_convolution_8_avx2
+               |          |          
+               |          |--1.20%--x_convolution_16_avx2
+               |          |          
+               |           --0.48%--sad_avx2_wrapper
+               |                     sad_avx2
+               |          
+               |--0.48%--0x7ffff79a09f1
+               |          
+               |--0.36%--vmaf_feature_extractor_context_init
+               |          0x7ffff79a10c9
+               |          asm_exc_page_fault
+               |          exc_page_fault
+               |          do_user_addr_fault
+               |          handle_mm_fault
+               |          __handle_mm_fault
+               |          
+                --0.36%--0x7ffff79a0a24
+
+    95.43%     0.00%             0  vmaf     vmaf               [.] threaded_extract_func
+            |
+            ---threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               |          
+               |--71.60%--extract
+               |          |          
+               |          |--46.57%--vif_statistic_8_avx2
+               |          |          
+               |          |--17.81%--vif_statistic_16_avx2
+               |          |          
+               |          |--6.26%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --0.96%--vif_subsample_rd_16_avx2
+               |          
+               |--19.37%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--3.97%--adm_decouple_avx2
+               |          |          
+               |          |--3.25%--adm_decouple_s123_avx2
+               |          |          
+               |          |--3.13%--adm_dwt2_8_avx2
+               |          |          
+               |          |--2.65%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--1.93%--adm_cm_avx2
+               |          |          
+               |          |--1.20%--i4_adm_cm_avx2
+               |          |          
+               |          |--1.08%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--0.84%--adm_csf_avx2
+               |          |          
+               |          |--0.60%--adm_csf_den_s123_avx2
+               |          |          
+               |           --0.48%--i4_adm_csf_avx2
+               |          
+               |--2.89%--extract
+               |          |          
+               |          |--1.20%--y_convolution_8_avx2
+               |          |          
+               |          |--1.20%--x_convolution_16_avx2
+               |          |          
+               |           --0.48%--sad_avx2_wrapper
+               |                     sad_avx2
+               |          
+               |--0.48%--0x7ffff79a09f1
+               |          
+               |--0.36%--vmaf_feature_extractor_context_init
+               |          0x7ffff79a10c9
+               |          asm_exc_page_fault
+               |          exc_page_fault
+               |          do_user_addr_fault
+               |          handle_mm_fault
+               |          __handle_mm_fault
+               |          
+                --0.36%--0x7ffff79a0a24
+
+    95.43%     0.00%             0  vmaf     vmaf               [.] vmaf_feature_extractor_context_extract
+            |
+            ---vmaf_feature_extractor_context_extract
+               |          
+               |--71.60%--extract
+               |          |          
+               |          |--46.57%--vif_statistic_8_avx2
+               |          |          
+               |          |--17.81%--vif_statistic_16_avx2
+               |          |          
+               |          |--6.26%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --0.96%--vif_subsample_rd_16_avx2
+               |          
+               |--19.37%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--3.97%--adm_decouple_avx2
+               |          |          
+               |          |--3.25%--adm_decouple_s123_avx2
+               |          |          
+               |          |--3.13%--adm_dwt2_8_avx2
+               |          |          
+               |          |--2.65%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--1.93%--adm_cm_avx2
+               |          |          
+               |          |--1.20%--i4_adm_cm_avx2
+               |          |          
+               |          |--1.08%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--0.84%--adm_csf_avx2
+               |          |          
+               |          |--0.60%--adm_csf_den_s123_avx2
+               |          |          
+               |           --0.48%--i4_adm_csf_avx2
+               |          
+               |--2.89%--extract
+               |          |          
+               |          |--1.20%--y_convolution_8_avx2
+               |          |          
+               |          |--1.20%--x_convolution_16_avx2
+               |          |          
+               |           --0.48%--sad_avx2_wrapper
+               |                     sad_avx2
+               |          
+               |--0.48%--0x7ffff79a09f1
+               |          
+               |--0.36%--vmaf_feature_extractor_context_init
+               |          0x7ffff79a10c9
+               |          asm_exc_page_fault
+               |          exc_page_fault
+               |          do_user_addr_fault
+               |          handle_mm_fault
+               |          __handle_mm_fault
+               |          
+                --0.36%--0x7ffff79a0a24
+
+    71.60%     0.00%             0  vmaf     vmaf               [.] extract
+            |
+            ---extract
+               |          
+               |--46.57%--vif_statistic_8_avx2
+               |          
+               |--17.81%--vif_statistic_16_avx2
+               |          
+               |--6.26%--vif_subsample_rd_8_avx2
+               |          
+                --0.96%--vif_subsample_rd_16_avx2
+
+    46.57%    46.57%           387  vmaf     vmaf               [.] vif_statistic_8_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               vif_statistic_8_avx2
+
+    19.37%     0.00%             0  vmaf     vmaf               [.] extract
+            |
+            ---extract
+               integer_compute_adm
+               |          
+               |--3.97%--adm_decouple_avx2
+               |          
+               |--3.25%--adm_decouple_s123_avx2
+               |          
+               |--3.13%--adm_dwt2_8_avx2
+               |          
+               |--2.65%--adm_dwt2_s1_combined_avx2
+               |          
+               |--1.93%--adm_cm_avx2
+               |          
+               |--1.20%--i4_adm_cm_avx2
+               |          
+               |--1.08%--adm_dwt2_s123_combined_avx2
+               |          
+               |--0.84%--adm_csf_avx2
+               |          
+               |--0.60%--adm_csf_den_s123_avx2
+               |          
+                --0.48%--i4_adm_csf_avx2
+
+    19.37%     0.00%             0  vmaf     vmaf               [.] integer_compute_adm
+            |
+            ---integer_compute_adm
+               |          
+               |--3.97%--adm_decouple_avx2
+               |          
+               |--3.25%--adm_decouple_s123_avx2
+               |          
+               |--3.13%--adm_dwt2_8_avx2
+               |          
+               |--2.65%--adm_dwt2_s1_combined_avx2
+               |          
+               |--1.93%--adm_cm_avx2
+               |          
+               |--1.20%--i4_adm_cm_avx2
+               |          
+               |--1.08%--adm_dwt2_s123_combined_avx2
+               |          
+               |--0.84%--adm_csf_avx2
+               |          
+               |--0.60%--adm_csf_den_s123_avx2
+               |          
+                --0.48%--i4_adm_csf_avx2
+
+    17.81%    17.81%           148  vmaf     vmaf               [.] vif_statistic_16_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               vif_statistic_16_avx2
+
+     6.26%     6.26%            52  vmaf     vmaf               [.] vif_subsample_rd_8_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               vif_subsample_rd_8_avx2
+
+     3.97%     3.97%            33  vmaf     vmaf               [.] adm_decouple_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_decouple_avx2
+
+     3.25%     3.25%            27  vmaf     vmaf               [.] adm_decouple_s123_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_decouple_s123_avx2
+
+     3.13%     3.13%            26  vmaf     vmaf               [.] adm_dwt2_8_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_dwt2_8_avx2
+
+     2.89%     0.00%             0  vmaf     vmaf               [.] extract
+            |
+            ---extract
+               |          
+               |--1.20%--y_convolution_8_avx2
+               |          
+               |--1.20%--x_convolution_16_avx2
+               |          
+                --0.48%--sad_avx2_wrapper
+                          sad_avx2
+
+     2.65%     2.53%            21  vmaf     vmaf               [.] adm_dwt2_s1_combined_avx2
+            |          
+             --2.53%--0x7ffff7894ac3
+                       vmaf_thread_pool_runner
+                       threaded_extract_func
+                       vmaf_feature_extractor_context_extract
+                       extract
+                       integer_compute_adm
+                       adm_dwt2_s1_combined_avx2
+
+     2.53%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff7829d90
+            |
+            ---0x7ffff7829d90
+               main
+               |          
+                --2.29%--fetch_picture
+                          |          
+                          |--1.20%--0x7ffff79a10c9
+                          |          |          
+                          |           --1.08%--asm_exc_page_fault
+                          |                     exc_page_fault
+                          |                     do_user_addr_fault
+                          |                     |          
+                          |                      --0.96%--handle_mm_fault
+                          |                                |          
+                          |                                 --0.84%--__handle_mm_fault
+                          |                                           |          
+                          |                                            --0.72%--handle_pte_fault
+                          |                                                      do_anonymous_page
+                          |                                                      |          
+                          |                                                       --0.36%--alloc_anon_folio
+                          |                                                                 vma_alloc_folio
+                          |                                                                 alloc_pages_mpol
+                          |                                                                 __alloc_pages
+                          |                                                                 get_page_from_freelist
+                          |          
+                           --0.84%--0x7ffff79a10c0
+                                     asm_exc_page_fault
+                                     exc_page_fault
+                                     do_user_addr_fault
+                                     |          
+                                      --0.72%--handle_mm_fault
+                                                __handle_mm_fault
+                                                |          
+                                                |--0.36%--do_huge_pmd_anonymous_page
+                                                |          
+                                                 --0.36%--handle_pte_fault
+                                                           do_anonymous_page
+                                                           alloc_anon_folio
+                                                           vma_alloc_folio
+                                                           alloc_pages_mpol
+                                                           __alloc_pages
+
+     2.53%     0.00%             0  vmaf     vmaf               [.] main
+            |
+            ---main
+               |          
+                --2.29%--fetch_picture
+                          |          
+                          |--1.20%--0x7ffff79a10c9
+                          |          |          
+                          |           --1.08%--asm_exc_page_fault
+                          |                     exc_page_fault
+                          |                     do_user_addr_fault
+                          |                     |          
+                          |                      --0.96%--handle_mm_fault
+                          |                                |          
+                          |                                 --0.84%--__handle_mm_fault
+                          |                                           |          
+                          |                                            --0.72%--handle_pte_fault
+                          |                                                      do_anonymous_page
+                          |                                                      |          
+                          |                                                       --0.36%--alloc_anon_folio
+                          |                                                                 vma_alloc_folio
+                          |                                                                 alloc_pages_mpol
+                          |                                                                 __alloc_pages
+                          |                                                                 get_page_from_freelist
+                          |          
+                           --0.84%--0x7ffff79a10c0
+                                     asm_exc_page_fault
+                                     exc_page_fault
+                                     do_user_addr_fault
+                                     |          
+                                      --0.72%--handle_mm_fault
+                                                __handle_mm_fault
+                                                |          
+                                                |--0.36%--do_huge_pmd_anonymous_page
+                                                |          
+                                                 --0.36%--handle_pte_fault
+                                                           do_anonymous_page
+                                                           alloc_anon_folio
+                                                           vma_alloc_folio
+                                                           alloc_pages_mpol
+                                                           __alloc_pages
+
+     2.41%     0.00%             0  vmaf     [kernel.kallsyms]  [k] asm_exc_page_fault
+            |
+            ---asm_exc_page_fault
+               exc_page_fault
+               do_user_addr_fault
+               |          
+                --2.17%--handle_mm_fault
+                          |          
+                           --2.05%--__handle_mm_fault
+                                     |          
+                                     |--1.20%--handle_pte_fault
+                                     |          do_anonymous_page
+                                     |          |          
+                                     |           --0.84%--alloc_anon_folio
+                                     |                     vma_alloc_folio
+                                     |                     alloc_pages_mpol
+                                     |                     __alloc_pages
+                                     |                     |          
+                                     |                      --0.72%--get_page_from_freelist
+                                     |                                |          
+                                     |                                |--0.36%--clear_page_rep
+                                     |                                |          
+                                     |                                 --0.36%--rmqueue
+                                     |          
+                                      --0.72%--do_huge_pmd_anonymous_page
+                                                |          
+                                                 --0.48%--__do_huge_pmd_anonymous_page
+
+     2.41%     0.00%             0  vmaf     [kernel.kallsyms]  [k] exc_page_fault
+            |
+            ---exc_page_fault
+               do_user_addr_fault
+               |          
+                --2.17%--handle_mm_fault
+                          |          
+                           --2.05%--__handle_mm_fault
+                                     |          
+                                     |--1.20%--handle_pte_fault
+                                     |          do_anonymous_page
+                                     |          |          
+                                     |           --0.84%--alloc_anon_folio
+                                     |                     vma_alloc_folio
+                                     |                     alloc_pages_mpol
+                                     |                     __alloc_pages
+                                     |                     |          
+                                     |                      --0.72%--get_page_from_freelist
+                                     |                                |          
+                                     |                                |--0.36%--clear_page_rep
+                                     |                                |          
+                                     |                                 --0.36%--rmqueue
+                                     |          
+                                      --0.72%--do_huge_pmd_anonymous_page
+                                                |          
+                                                 --0.48%--__do_huge_pmd_anonymous_page
+
+     2.41%     0.24%             2  vmaf     [kernel.kallsyms]  [k] do_user_addr_fault
+            |          
+             --2.17%--do_user_addr_fault
+                       handle_mm_fault
+                       |          
+                        --2.05%--__handle_mm_fault
+                                  |          
+                                  |--1.20%--handle_pte_fault
+                                  |          do_anonymous_page
+                                  |          |          
+                                  |           --0.84%--alloc_anon_folio
+                                  |                     vma_alloc_folio
+                                  |                     alloc_pages_mpol
+                                  |                     __alloc_pages
+                                  |                     |          
+                                  |                      --0.72%--get_page_from_freelist
+                                  |                                |          
+                                  |                                |--0.36%--clear_page_rep
+                                  |                                |          
+                                  |                                 --0.36%--rmqueue
+                                  |          
+                                   --0.72%--do_huge_pmd_anonymous_page
+                                             |          
+                                              --0.48%--__do_huge_pmd_anonymous_page
+
+     2.29%     0.00%             0  vmaf     vmaf               [.] fetch_picture
+            |
+            ---fetch_picture
+               |          
+               |--1.20%--0x7ffff79a10c9
+               |          |          
+               |           --1.08%--asm_exc_page_fault
+               |                     exc_page_fault
+               |                     do_user_addr_fault
+               |                     |          
+               |                      --0.96%--handle_mm_fault
+               |                                |          
+               |                                 --0.84%--__handle_mm_fault
+               |                                           |          
+               |                                            --0.72%--handle_pte_fault
+               |                                                      do_anonymous_page
+               |                                                      |          
+               |                                                       --0.36%--alloc_anon_folio
+               |                                                                 vma_alloc_folio
+               |                                                                 alloc_pages_mpol
+               |                                                                 __alloc_pages
+               |                                                                 get_page_from_freelist
+               |          
+                --0.84%--0x7ffff79a10c0
+                          asm_exc_page_fault
+                          exc_page_fault
+                          do_user_addr_fault
+                          |          
+                           --0.72%--handle_mm_fault
+                                     __handle_mm_fault
+                                     |          
+                                     |--0.36%--do_huge_pmd_anonymous_page
+                                     |          
+                                      --0.36%--handle_pte_fault
+                                                do_anonymous_page
+                                                alloc_anon_folio
+                                                vma_alloc_folio
+                                                alloc_pages_mpol
+                                                __alloc_pages
+
+     2.17%     0.12%             1  vmaf     [kernel.kallsyms]  [k] handle_mm_fault
+            |          
+             --2.05%--handle_mm_fault
+                       __handle_mm_fault
+                       |          
+                       |--1.20%--handle_pte_fault
+                       |          do_anonymous_page
+                       |          |          
+                       |           --0.84%--alloc_anon_folio
+                       |                     vma_alloc_folio
+                       |                     alloc_pages_mpol
+                       |                     __alloc_pages
+                       |                     |          
+                       |                      --0.72%--get_page_from_freelist
+                       |                                |          
+                       |                                |--0.36%--clear_page_rep
+                       |                                |          
+                       |                                 --0.36%--rmqueue
+                       |          
+                        --0.72%--do_huge_pmd_anonymous_page
+                                  |          
+                                   --0.48%--__do_huge_pmd_anonymous_page
+
+     2.05%     0.00%             0  vmaf     [kernel.kallsyms]  [k] __handle_mm_fault
+            |
+            ---__handle_mm_fault
+               |          
+               |--1.20%--handle_pte_fault
+               |          do_anonymous_page
+               |          |          
+               |           --0.84%--alloc_anon_folio
+               |                     vma_alloc_folio
+               |                     alloc_pages_mpol
+               |                     __alloc_pages
+               |                     |          
+               |                      --0.72%--get_page_from_freelist
+               |                                |          
+               |                                |--0.36%--clear_page_rep
+               |                                |          
+               |                                 --0.36%--rmqueue
+               |          
+                --0.72%--do_huge_pmd_anonymous_page
+                          |          
+                           --0.48%--__do_huge_pmd_anonymous_page
+
+     2.05%     0.00%             0  vmaf     [kernel.kallsyms]  [k] entry_SYSCALL_64_after_hwframe
+            |
+            ---entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               |          
+               |--1.56%--__x64_sys_read
+               |          ksys_read
+               |          vfs_read
+               |          |          
+               |           --1.44%--ext4_file_read_iter
+               |                     generic_file_read_iter
+               |                     filemap_read
+               |                     |          
+               |                      --1.32%--copy_page_to_iter
+               |                                |          
+               |                                 --1.08%--rep_movs_alternative
+               |          
+                --0.36%--__x64_sys_munmap
+                          __vm_munmap
+                          do_vmi_munmap
+                          do_vmi_align_munmap
+                          unmap_region
+
+     2.05%     0.00%             0  vmaf     [kernel.kallsyms]  [k] do_syscall_64
+            |
+            ---do_syscall_64
+               x64_sys_call
+               |          
+               |--1.56%--__x64_sys_read
+               |          ksys_read
+               |          vfs_read
+               |          |          
+               |           --1.44%--ext4_file_read_iter
+               |                     generic_file_read_iter
+               |                     filemap_read
+               |                     |          
+               |                      --1.32%--copy_page_to_iter
+               |                                |          
+               |                                 --1.08%--rep_movs_alternative
+               |          
+                --0.36%--__x64_sys_munmap
+                          __vm_munmap
+                          do_vmi_munmap
+                          do_vmi_align_munmap
+                          unmap_region
+
+     2.05%     0.00%             0  vmaf     [kernel.kallsyms]  [k] x64_sys_call
+            |
+            ---x64_sys_call
+               |          
+               |--1.56%--__x64_sys_read
+               |          ksys_read
+               |          vfs_read
+               |          |          
+               |           --1.44%--ext4_file_read_iter
+               |                     generic_file_read_iter
+               |                     filemap_read
+               |                     |          
+               |                      --1.32%--copy_page_to_iter
+               |                                |          
+               |                                 --1.08%--rep_movs_alternative
+               |          
+                --0.36%--__x64_sys_munmap
+                          __vm_munmap
+                          do_vmi_munmap
+                          do_vmi_align_munmap
+                          unmap_region
+
+     1.93%     1.93%            16  vmaf     vmaf               [.] adm_cm_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_cm_avx2
+
+     1.56%     0.00%             0  vmaf     [unknown]          [k] 0000000000000000
+            |
+            ---0
+               read
+               entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               __x64_sys_read
+               ksys_read
+               vfs_read
+               |          
+                --1.44%--ext4_file_read_iter
+                          generic_file_read_iter
+                          filemap_read
+                          |          
+                           --1.32%--copy_page_to_iter
+                                     |          
+                                      --1.08%--rep_movs_alternative
+
+     1.56%     0.00%             0  vmaf     libc.so.6          [.] read
+            |
+            ---read
+               entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               __x64_sys_read
+               ksys_read
+               vfs_read
+               |          
+                --1.44%--ext4_file_read_iter
+                          generic_file_read_iter
+                          filemap_read
+                          |          
+                           --1.32%--copy_page_to_iter
+                                     |          
+                                      --1.08%--rep_movs_alternative
+
+     1.56%     0.12%             1  vmaf     [kernel.kallsyms]  [k] vfs_read
+            |          
+             --1.44%--vfs_read
+                       ext4_file_read_iter
+                       generic_file_read_iter
+                       filemap_read
+                       |          
+                        --1.32%--copy_page_to_iter
+                                  |          
+                                   --1.08%--rep_movs_alternative
+
+     1.56%     0.00%             0  vmaf     [kernel.kallsyms]  [k] __x64_sys_read
+            |
+            ---__x64_sys_read
+               ksys_read
+               vfs_read
+               |          
+                --1.44%--ext4_file_read_iter
+                          generic_file_read_iter
+                          filemap_read
+                          |          
+                           --1.32%--copy_page_to_iter
+                                     |          
+                                      --1.08%--rep_movs_alternative
+
+     1.56%     0.00%             0  vmaf     [kernel.kallsyms]  [k] ksys_read
+            |
+            ---ksys_read
+               vfs_read
+               |          
+                --1.44%--ext4_file_read_iter
+                          generic_file_read_iter
+                          filemap_read
+                          |          
+                           --1.32%--copy_page_to_iter
+                                     |          
+                                      --1.08%--rep_movs_alternative
+
+     1.56%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a10c9
+            |
+            ---0x7ffff79a10c9
+               |          
+                --1.44%--asm_exc_page_fault
+                          exc_page_fault
+                          do_user_addr_fault
+                          |          
+                           --1.32%--handle_mm_fault
+                                     |          
+                                      --1.20%--__handle_mm_fault
+                                                |          
+                                                 --0.84%--handle_pte_fault
+                                                           do_anonymous_page
+                                                           |          
+                                                            --0.48%--alloc_anon_folio
+                                                                      vma_alloc_folio
+                                                                      alloc_pages_mpol
+                                                                      __alloc_pages
+                                                                      get_page_from_freelist
+                                                                      |          
+                                                                       --0.36%--clear_page_rep
+
+     1.44%     0.00%             0  vmaf     [kernel.kallsyms]  [k] ext4_file_read_iter
+            |
+            ---ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               |          
+                --1.32%--copy_page_to_iter
+                          |          
+                           --1.08%--rep_movs_alternative
+
+     1.44%     0.00%             0  vmaf     [kernel.kallsyms]  [k] generic_file_read_iter
+            |
+            ---generic_file_read_iter
+               filemap_read
+               |          
+                --1.32%--copy_page_to_iter
+                          |          
+                           --1.08%--rep_movs_alternative
+
+     1.44%     0.00%             0  vmaf     [kernel.kallsyms]  [k] filemap_read
+            |
+            ---filemap_read
+               |          
+                --1.32%--copy_page_to_iter
+                          |          
+                           --1.08%--rep_movs_alternative
+
+     1.32%     0.12%             1  vmaf     [kernel.kallsyms]  [k] copy_page_to_iter
+            |          
+             --1.20%--copy_page_to_iter
+                       |          
+                        --1.08%--rep_movs_alternative
+
+     1.32%     0.24%             2  vmaf     [kernel.kallsyms]  [k] do_anonymous_page
+            |          
+             --1.08%--do_anonymous_page
+                       |          
+                        --0.84%--alloc_anon_folio
+                                  vma_alloc_folio
+                                  alloc_pages_mpol
+                                  __alloc_pages
+                                  |          
+                                   --0.72%--get_page_from_freelist
+                                             |          
+                                             |--0.36%--clear_page_rep
+                                             |          
+                                              --0.36%--rmqueue
+
+     1.20%     1.20%            10  vmaf     vmaf               [.] i4_adm_cm_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               i4_adm_cm_avx2
+
+     1.20%     1.20%            10  vmaf     vmaf               [.] x_convolution_16_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               x_convolution_16_avx2
+
+     1.20%     1.20%            10  vmaf     vmaf               [.] y_convolution_8_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               y_convolution_8_avx2
+
+     1.20%     0.00%             0  vmaf     [kernel.kallsyms]  [k] handle_pte_fault
+            |
+            ---handle_pte_fault
+               do_anonymous_page
+               |          
+                --0.84%--alloc_anon_folio
+                          vma_alloc_folio
+                          alloc_pages_mpol
+                          __alloc_pages
+                          |          
+                           --0.72%--get_page_from_freelist
+                                     |          
+                                     |--0.36%--clear_page_rep
+                                     |          
+                                      --0.36%--rmqueue
+
+     1.08%     1.08%             9  vmaf     [kernel.kallsyms]  [k] rep_movs_alternative
+            |
+            ---0
+               read
+               entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               __x64_sys_read
+               ksys_read
+               vfs_read
+               ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               copy_page_to_iter
+               rep_movs_alternative
+
+     1.08%     1.08%             9  vmaf     vmaf               [.] adm_dwt2_s123_combined_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_dwt2_s123_combined_avx2
+
+     1.08%     0.12%             1  vmaf     [kernel.kallsyms]  [k] __alloc_pages
+            |          
+             --0.96%--__alloc_pages
+                       get_page_from_freelist
+                       |          
+                       |--0.60%--clear_page_rep
+                       |          
+                        --0.36%--rmqueue
+
+     1.08%     0.00%             0  vmaf     [kernel.kallsyms]  [k] vma_alloc_folio
+            |
+            ---vma_alloc_folio
+               alloc_pages_mpol
+               __alloc_pages
+               |          
+                --0.96%--get_page_from_freelist
+                          |          
+                          |--0.60%--clear_page_rep
+                          |          
+                           --0.36%--rmqueue
+
+     1.08%     0.00%             0  vmaf     [kernel.kallsyms]  [k] alloc_pages_mpol
+            |
+            ---alloc_pages_mpol
+               __alloc_pages
+               |          
+                --0.96%--get_page_from_freelist
+                          |          
+                          |--0.60%--clear_page_rep
+                          |          
+                           --0.36%--rmqueue
+
+     0.96%     0.96%             8  vmaf     vmaf               [.] vif_subsample_rd_16_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               vif_subsample_rd_16_avx2
+
+     0.96%     0.00%             0  vmaf     [kernel.kallsyms]  [k] get_page_from_freelist
+            |
+            ---get_page_from_freelist
+               |          
+               |--0.60%--clear_page_rep
+               |          
+                --0.36%--rmqueue
+
+     0.84%     0.84%             7  vmaf     [kernel.kallsyms]  [k] clear_page_rep
+            |          
+            |--0.48%--0x7ffff7829d90
+            |          main
+            |          fetch_picture
+            |          
+             --0.36%--0x7ffff7894ac3
+                       vmaf_thread_pool_runner
+                       threaded_extract_func
+                       vmaf_feature_extractor_context_extract
+                       vmaf_feature_extractor_context_init
+                       0x7ffff79a10c9
+                       asm_exc_page_fault
+                       exc_page_fault
+                       do_user_addr_fault
+                       handle_mm_fault
+                       __handle_mm_fault
+
+     0.84%     0.84%             7  vmaf     vmaf               [.] adm_csf_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_csf_avx2
+
+     0.84%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a10c0
+            |
+            ---0x7ffff79a10c0
+               asm_exc_page_fault
+               exc_page_fault
+               do_user_addr_fault
+               |          
+                --0.72%--handle_mm_fault
+                          __handle_mm_fault
+                          |          
+                          |--0.36%--do_huge_pmd_anonymous_page
+                          |          
+                           --0.36%--handle_pte_fault
+                                     do_anonymous_page
+                                     alloc_anon_folio
+                                     vma_alloc_folio
+                                     alloc_pages_mpol
+                                     __alloc_pages
+
+     0.84%     0.00%             0  vmaf     [kernel.kallsyms]  [k] alloc_anon_folio
+            |
+            ---alloc_anon_folio
+               vma_alloc_folio
+               alloc_pages_mpol
+               __alloc_pages
+               |          
+                --0.72%--get_page_from_freelist
+                          |          
+                          |--0.36%--clear_page_rep
+                          |          
+                           --0.36%--rmqueue
+
+     0.72%     0.00%             0  vmaf     [kernel.kallsyms]  [k] do_huge_pmd_anonymous_page
+            |
+            ---do_huge_pmd_anonymous_page
+               |          
+                --0.48%--__do_huge_pmd_anonymous_page
+
+     0.60%     0.60%             5  vmaf     vmaf               [.] adm_csf_den_s123_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_csf_den_s123_avx2
+
+     0.48%     0.48%             4  vmaf     [kernel.kallsyms]  [k] _raw_spin_unlock_irqrestore
+            |
+            ---0x7ffff7829d90
+               main
+               fetch_picture
+
+     0.48%     0.48%             4  vmaf     vmaf               [.] sad_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               sad_avx2_wrapper
+               sad_avx2
+
+     0.48%     0.48%             4  vmaf     libc.so.6          [.] 0x00000000001a09f1
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               0x7ffff79a09f1
+
+     0.48%     0.48%             4  vmaf     vmaf               [.] i4_adm_csf_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               i4_adm_csf_avx2
+
+     0.48%     0.00%             0  vmaf     [kernel.kallsyms]  [k] __do_huge_pmd_anonymous_page
+            |
+            ---__do_huge_pmd_anonymous_page
+
+     0.48%     0.00%             0  vmaf     vmaf               [.] sad_avx2_wrapper
+            |
+            ---sad_avx2_wrapper
+               sad_avx2
+
+     0.48%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a09f1
+            |
+            ---0x7ffff79a09f1
+
+     0.36%     0.36%             3  vmaf     libc.so.6          [.] 0x00000000001a0a24
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               0x7ffff79a0a24
+
+     0.36%     0.12%             1  vmaf     [kernel.kallsyms]  [k] rmqueue
+     0.36%     0.00%             0  vmaf     libc.so.6          [.] __munmap
+            |
+            ---__munmap
+               entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               __x64_sys_munmap
+               __vm_munmap
+               do_vmi_munmap
+               do_vmi_align_munmap
+               unmap_region
+
+     0.36%     0.00%             0  vmaf     [kernel.kallsyms]  [k] __x64_sys_munmap
+            |
+            ---__x64_sys_munmap
+               __vm_munmap
+               do_vmi_munmap
+               do_vmi_align_munmap
+               unmap_region
+
+     0.36%     0.00%             0  vmaf     [kernel.kallsyms]  [k] __vm_munmap
+            |
+            ---__vm_munmap
+               do_vmi_munmap
+               do_vmi_align_munmap
+               unmap_region
+
+     0.36%     0.00%             0  vmaf     [kernel.kallsyms]  [k] do_vmi_munmap
+            |
+            ---do_vmi_munmap
+               do_vmi_align_munmap
+               unmap_region
+
+     0.36%     0.00%             0  vmaf     [kernel.kallsyms]  [k] do_vmi_align_munmap
+            |
+            ---do_vmi_align_munmap
+               unmap_region
+
+     0.36%     0.00%             0  vmaf     [kernel.kallsyms]  [k] unmap_region
+            |
+            ---unmap_region
+
+     0.36%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a0a24
+            |
+            ---0x7ffff79a0a24
+
+     0.36%     0.00%             0  vmaf     vmaf               [.] vmaf_feature_extractor_context_init
+            |
+            ---vmaf_feature_extractor_context_init
+               0x7ffff79a10c9
+               asm_exc_page_fault
+               exc_page_fault
+               do_user_addr_fault
+               handle_mm_fault
+               __handle_mm_fault
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

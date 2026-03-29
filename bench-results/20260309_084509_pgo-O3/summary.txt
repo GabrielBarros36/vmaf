@@ -1,0 +1,82 @@
+VMAF PGO Benchmark Summary
+==========================
+
+Label:   pgo-O3
+Date:    20260309_084509
+Build:   PGO (-O3 -march=znver3 -fprofile-use)
+Threads: 8
+
+--- Machine State ---
+timestamp:    2026-03-09T08:45:33Z
+hostname:     ip-172-31-46-156
+kernel:       6.8.0-1046-aws
+cpu:          AMD EPYC 7R13 Processor
+logical_cpus: 8
+numa_nodes:   1
+governor:     N/A (VM)
+cpu_freq_mhz: 3075.259
+boost:        N/A (VM)
+aslr:         0
+thp:          always
+perf_paranoid:-1
+avx_flags:    avx avx2 
+loadavg_1m:   0.98
+vmaf_commit:  29c8b3790853001a7300e8bd84a0600d886dcf36
+
+--- Timing (5 runs, mean ± stddev) ---
+          8,728.77 msec task-clock                       #    7.642 CPUs utilized               ( +-  0.24% )
+               459      context-switches                 #   52.585 /sec                        ( +-  6.11% )
+            55,566      page-faults                      #    6.366 K/sec                       ( +-  1.45% )
+           1.14218 +- 0.00434 seconds time elapsed  ( +-  0.38% )
+
+--- Top CPU Hotspots ---
+    71.90%     0.00%             0  vmaf     vmaf               [.] extract
+            |
+            ---extract
+               |          
+               |--48.36%--vif_statistic_8_avx2.cold
+               |          
+               |--16.98%--vif_statistic_16_avx2
+               |          
+               |--4.80%--vif_subsample_rd_8_avx2
+               |          
+                --1.76%--vif_subsample_rd_16_avx2
+
+    48.36%    48.36%           413  vmaf     vmaf               [.] vif_statistic_8_avx2.cold
+            |
+            ---extract
+               vif_statistic_8_avx2.cold
+
+    19.20%     0.00%             0  vmaf     [unknown]          [k] 0x0000000000000880
+            |
+            ---0x880
+               extract
+               integer_compute_adm
+               |          
+               |--4.10%--adm_dwt2_s1_combined_avx2
+               |          
+               |--3.98%--adm_decouple_avx2
+               |          
+               |--3.04%--adm_decouple_s123_avx2
+               |          
+               |--2.58%--adm_dwt2_8_avx2
+               |          
+               |--1.52%--adm_cm_avx2
+               |          
+               |--1.05%--i4_adm_cm_avx2
+               |          
+               |--0.94%--adm_dwt2_s123_combined_avx2
+               |          
+               |--0.82%--adm_csf_avx2
+               |          
+                --0.70%--i4_adm_csf_avx2
+
+    19.20%     0.00%             0  vmaf     vmaf               [.] extract
+            |
+            ---extract
+               integer_compute_adm
+               |          
+               |--4.10%--adm_dwt2_s1_combined_avx2
+               |          
+               |--3.98%--adm_decouple_avx2
+               |          

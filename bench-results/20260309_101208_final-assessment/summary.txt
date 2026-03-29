@@ -1,0 +1,88 @@
+VMAF Benchmark Summary
+======================
+
+Label:   final-assessment
+Date:    20260309_101208
+
+--- Machine State ---
+timestamp:    2026-03-09T10:12:19Z
+hostname:     ip-172-31-46-156
+kernel:       6.8.0-1046-aws
+cpu:          AMD EPYC 7R13 Processor
+logical_cpus: 8
+numa_nodes:   1
+governor:     N/A (VM)
+cpu_freq_mhz: 3291.670
+boost:        N/A (VM)
+aslr:         0
+thp:          always
+perf_paranoid:-1
+avx_flags:    avx avx2 
+loadavg_1m:   0.28
+vmaf_commit:  29c8b3790853001a7300e8bd84a0600d886dcf36
+
+--- Timing and Hardware Counters (7 runs, mean ± stddev) ---
+          8,387.66 msec task-clock                       #    7.640 CPUs utilized               ( +-  0.26% )
+               443      context-switches                 #   52.816 /sec                        ( +-  2.18% )
+            54,173      page-faults                      #    6.459 K/sec                       ( +-  1.29% )
+           1.09781 +- 0.00329 seconds time elapsed  ( +-  0.30% )
+
+--- Top CPU Hotspots ---
+    95.83%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff7894ac3
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               |          
+               |--72.64%--extract
+               |          |          
+               |          |--47.12%--vif_statistic_8_avx2
+               |          |          
+               |          |--17.67%--vif_statistic_16_avx2
+               |          |          
+               |          |--5.77%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --1.96%--vif_subsample_rd_16_avx2
+               |          
+               |--19.51%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--3.93%--adm_decouple_avx2
+               |          |          
+               |          |--2.94%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--2.82%--adm_decouple_s123_avx2
+               |          |          
+               |          |--2.58%--adm_dwt2_8_avx2
+               |          |          
+               |          |--1.96%--adm_cm_avx2
+               |          |          
+               |          |--1.23%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--1.10%--i4_adm_cm_avx2
+               |          |          
+               |          |--0.98%--adm_csf_avx2
+               |          |          
+               |          |--0.86%--adm_csf_den_s123_avx2
+               |          |          
+               |          |--0.61%--i4_adm_csf_avx2
+               |          |          
+               |           --0.49%--adm_csf_den_scale_avx2
+               |          
+               |--2.94%--extract
+               |          |          
+               |          |--1.23%--y_convolution_8_avx2
+               |          |          
+               |          |--1.10%--sad_avx2_wrapper
+               |          |          sad_avx2
+               |          |          
+               |           --0.61%--x_convolution_16_avx2
+
+--- Result Files ---
+  /root/Development/vmaf/bench-results/20260309_101208_final-assessment/
+  ├── env.txt          machine state
+  ├── perf-stat.txt    raw perf stat output (timing + hw counters)
+  ├── perf-report.txt  per-function hotspots
+  ├── flamegraph.svg   open in browser for interactive call tree
+  └── summary.txt      this file

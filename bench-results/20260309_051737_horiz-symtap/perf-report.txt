@@ -1,0 +1,862 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 593  of event 'cpu-clock'
+# Event count (approx.): 5989898930
+#
+# Children      Self       Samples  Command  Shared Object      Symbol                                    
+# ........  ........  ............  .......  .................  ..........................................
+#
+    95.11%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff7894ac3
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               |          
+               |--70.66%--extract
+               |          |          
+               |          |--46.54%--vif_statistic_8_avx2
+               |          |          
+               |          |--16.69%--vif_statistic_16_avx2
+               |          |          
+               |          |--6.41%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --1.01%--vif_subsample_rd_16_avx2
+               |          
+               |--20.74%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--4.55%--adm_decouple_avx2
+               |          |          
+               |          |--3.20%--adm_dwt2_8_avx2
+               |          |          
+               |          |--3.04%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--3.04%--adm_decouple_s123_avx2
+               |          |          
+               |          |--2.02%--adm_cm_avx2
+               |          |          
+               |          |--1.52%--i4_adm_csf_avx2
+               |          |          
+               |          |--1.01%--adm_csf_avx2
+               |          |          
+               |          |--0.84%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--0.67%--i4_adm_cm_avx2
+               |          |          
+               |           --0.51%--adm_csf_den_s123_avx2
+               |          
+                --2.87%--extract
+                          |          
+                          |--1.18%--y_convolution_8_avx2
+                          |          
+                          |--1.01%--sad_avx2_wrapper
+                          |          sad_avx2
+                          |          
+                           --0.67%--x_convolution_16_avx2
+
+    95.11%     0.00%             0  vmaf     vmaf               [.] vmaf_thread_pool_runner
+            |
+            ---vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               |          
+               |--70.66%--extract
+               |          |          
+               |          |--46.54%--vif_statistic_8_avx2
+               |          |          
+               |          |--16.69%--vif_statistic_16_avx2
+               |          |          
+               |          |--6.41%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --1.01%--vif_subsample_rd_16_avx2
+               |          
+               |--20.74%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--4.55%--adm_decouple_avx2
+               |          |          
+               |          |--3.20%--adm_dwt2_8_avx2
+               |          |          
+               |          |--3.04%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--3.04%--adm_decouple_s123_avx2
+               |          |          
+               |          |--2.02%--adm_cm_avx2
+               |          |          
+               |          |--1.52%--i4_adm_csf_avx2
+               |          |          
+               |          |--1.01%--adm_csf_avx2
+               |          |          
+               |          |--0.84%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--0.67%--i4_adm_cm_avx2
+               |          |          
+               |           --0.51%--adm_csf_den_s123_avx2
+               |          
+                --2.87%--extract
+                          |          
+                          |--1.18%--y_convolution_8_avx2
+                          |          
+                          |--1.01%--sad_avx2_wrapper
+                          |          sad_avx2
+                          |          
+                           --0.67%--x_convolution_16_avx2
+
+    95.11%     0.00%             0  vmaf     vmaf               [.] threaded_extract_func
+            |
+            ---threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               |          
+               |--70.66%--extract
+               |          |          
+               |          |--46.54%--vif_statistic_8_avx2
+               |          |          
+               |          |--16.69%--vif_statistic_16_avx2
+               |          |          
+               |          |--6.41%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --1.01%--vif_subsample_rd_16_avx2
+               |          
+               |--20.74%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--4.55%--adm_decouple_avx2
+               |          |          
+               |          |--3.20%--adm_dwt2_8_avx2
+               |          |          
+               |          |--3.04%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--3.04%--adm_decouple_s123_avx2
+               |          |          
+               |          |--2.02%--adm_cm_avx2
+               |          |          
+               |          |--1.52%--i4_adm_csf_avx2
+               |          |          
+               |          |--1.01%--adm_csf_avx2
+               |          |          
+               |          |--0.84%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--0.67%--i4_adm_cm_avx2
+               |          |          
+               |           --0.51%--adm_csf_den_s123_avx2
+               |          
+                --2.87%--extract
+                          |          
+                          |--1.18%--y_convolution_8_avx2
+                          |          
+                          |--1.01%--sad_avx2_wrapper
+                          |          sad_avx2
+                          |          
+                           --0.67%--x_convolution_16_avx2
+
+    95.11%     0.00%             0  vmaf     vmaf               [.] vmaf_feature_extractor_context_extract
+            |
+            ---vmaf_feature_extractor_context_extract
+               |          
+               |--70.66%--extract
+               |          |          
+               |          |--46.54%--vif_statistic_8_avx2
+               |          |          
+               |          |--16.69%--vif_statistic_16_avx2
+               |          |          
+               |          |--6.41%--vif_subsample_rd_8_avx2
+               |          |          
+               |           --1.01%--vif_subsample_rd_16_avx2
+               |          
+               |--20.74%--extract
+               |          integer_compute_adm
+               |          |          
+               |          |--4.55%--adm_decouple_avx2
+               |          |          
+               |          |--3.20%--adm_dwt2_8_avx2
+               |          |          
+               |          |--3.04%--adm_dwt2_s1_combined_avx2
+               |          |          
+               |          |--3.04%--adm_decouple_s123_avx2
+               |          |          
+               |          |--2.02%--adm_cm_avx2
+               |          |          
+               |          |--1.52%--i4_adm_csf_avx2
+               |          |          
+               |          |--1.01%--adm_csf_avx2
+               |          |          
+               |          |--0.84%--adm_dwt2_s123_combined_avx2
+               |          |          
+               |          |--0.67%--i4_adm_cm_avx2
+               |          |          
+               |           --0.51%--adm_csf_den_s123_avx2
+               |          
+                --2.87%--extract
+                          |          
+                          |--1.18%--y_convolution_8_avx2
+                          |          
+                          |--1.01%--sad_avx2_wrapper
+                          |          sad_avx2
+                          |          
+                           --0.67%--x_convolution_16_avx2
+
+    70.66%     0.00%             0  vmaf     vmaf               [.] extract
+            |
+            ---extract
+               |          
+               |--46.54%--vif_statistic_8_avx2
+               |          
+               |--16.69%--vif_statistic_16_avx2
+               |          
+               |--6.41%--vif_subsample_rd_8_avx2
+               |          
+                --1.01%--vif_subsample_rd_16_avx2
+
+    46.54%    46.54%           276  vmaf     vmaf               [.] vif_statistic_8_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               vif_statistic_8_avx2
+
+    20.74%     0.00%             0  vmaf     vmaf               [.] extract
+            |
+            ---extract
+               integer_compute_adm
+               |          
+               |--4.55%--adm_decouple_avx2
+               |          
+               |--3.20%--adm_dwt2_8_avx2
+               |          
+               |--3.04%--adm_dwt2_s1_combined_avx2
+               |          
+               |--3.04%--adm_decouple_s123_avx2
+               |          
+               |--2.02%--adm_cm_avx2
+               |          
+               |--1.52%--i4_adm_csf_avx2
+               |          
+               |--1.01%--adm_csf_avx2
+               |          
+               |--0.84%--adm_dwt2_s123_combined_avx2
+               |          
+               |--0.67%--i4_adm_cm_avx2
+               |          
+                --0.51%--adm_csf_den_s123_avx2
+
+    20.74%     0.00%             0  vmaf     vmaf               [.] integer_compute_adm
+            |
+            ---integer_compute_adm
+               |          
+               |--4.55%--adm_decouple_avx2
+               |          
+               |--3.20%--adm_dwt2_8_avx2
+               |          
+               |--3.04%--adm_dwt2_s1_combined_avx2
+               |          
+               |--3.04%--adm_decouple_s123_avx2
+               |          
+               |--2.02%--adm_cm_avx2
+               |          
+               |--1.52%--i4_adm_csf_avx2
+               |          
+               |--1.01%--adm_csf_avx2
+               |          
+               |--0.84%--adm_dwt2_s123_combined_avx2
+               |          
+               |--0.67%--i4_adm_cm_avx2
+               |          
+                --0.51%--adm_csf_den_s123_avx2
+
+    16.69%    16.69%            99  vmaf     vmaf               [.] vif_statistic_16_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               vif_statistic_16_avx2
+
+     6.41%     6.41%            38  vmaf     vmaf               [.] vif_subsample_rd_8_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               vif_subsample_rd_8_avx2
+
+     4.55%     4.55%            27  vmaf     vmaf               [.] adm_decouple_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_decouple_avx2
+
+     3.20%     3.20%            19  vmaf     vmaf               [.] adm_dwt2_8_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_dwt2_8_avx2
+
+     3.04%     3.04%            18  vmaf     vmaf               [.] adm_decouple_s123_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_decouple_s123_avx2
+
+     3.04%     2.87%            17  vmaf     vmaf               [.] adm_dwt2_s1_combined_avx2
+            |          
+             --2.87%--0x7ffff7894ac3
+                       vmaf_thread_pool_runner
+                       threaded_extract_func
+                       vmaf_feature_extractor_context_extract
+                       extract
+                       integer_compute_adm
+                       adm_dwt2_s1_combined_avx2
+
+     2.87%     0.00%             0  vmaf     vmaf               [.] extract
+            |
+            ---extract
+               |          
+               |--1.18%--y_convolution_8_avx2
+               |          
+               |--1.01%--sad_avx2_wrapper
+               |          sad_avx2
+               |          
+                --0.67%--x_convolution_16_avx2
+
+     2.36%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff7829d90
+            |
+            ---0x7ffff7829d90
+               main
+               |          
+               |--1.52%--fetch_picture
+               |          |          
+               |          |--0.51%--0x7ffff79a10c9
+               |          |          |          
+               |          |           --0.34%--asm_exc_page_fault
+               |          |                     exc_page_fault
+               |          |                     do_user_addr_fault
+               |          |                     handle_mm_fault
+               |          |                     __handle_mm_fault
+               |          |                     handle_pte_fault
+               |          |                     do_anonymous_page
+               |          |          
+               |          |--0.51%--0x7ffff79a10c4
+               |          |          
+               |           --0.34%--0x7ffff79a10ce
+               |          
+               |--0.34%--0x7ffff79a0a24
+               |          
+                --0.34%--0x7ffff79a09f1
+
+     2.36%     0.00%             0  vmaf     vmaf               [.] main
+            |
+            ---main
+               |          
+               |--1.52%--fetch_picture
+               |          |          
+               |          |--0.51%--0x7ffff79a10c9
+               |          |          |          
+               |          |           --0.34%--asm_exc_page_fault
+               |          |                     exc_page_fault
+               |          |                     do_user_addr_fault
+               |          |                     handle_mm_fault
+               |          |                     __handle_mm_fault
+               |          |                     handle_pte_fault
+               |          |                     do_anonymous_page
+               |          |          
+               |          |--0.51%--0x7ffff79a10c4
+               |          |          
+               |           --0.34%--0x7ffff79a10ce
+               |          
+               |--0.34%--0x7ffff79a0a24
+               |          
+                --0.34%--0x7ffff79a09f1
+
+     2.36%     0.00%             0  vmaf     [kernel.kallsyms]  [k] entry_SYSCALL_64_after_hwframe
+            |
+            ---entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               |          
+                --2.19%--__x64_sys_read
+                          ksys_read
+                          vfs_read
+                          ext4_file_read_iter
+                          generic_file_read_iter
+                          filemap_read
+                          |          
+                           --1.85%--copy_page_to_iter
+                                     rep_movs_alternative
+
+     2.36%     0.00%             0  vmaf     [kernel.kallsyms]  [k] do_syscall_64
+            |
+            ---do_syscall_64
+               x64_sys_call
+               |          
+                --2.19%--__x64_sys_read
+                          ksys_read
+                          vfs_read
+                          ext4_file_read_iter
+                          generic_file_read_iter
+                          filemap_read
+                          |          
+                           --1.85%--copy_page_to_iter
+                                     rep_movs_alternative
+
+     2.36%     0.00%             0  vmaf     [kernel.kallsyms]  [k] x64_sys_call
+            |
+            ---x64_sys_call
+               |          
+                --2.19%--__x64_sys_read
+                          ksys_read
+                          vfs_read
+                          ext4_file_read_iter
+                          generic_file_read_iter
+                          filemap_read
+                          |          
+                           --1.85%--copy_page_to_iter
+                                     rep_movs_alternative
+
+     2.19%     0.00%             0  vmaf     [unknown]          [k] 0000000000000000
+            |
+            ---0
+               read
+               entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               __x64_sys_read
+               ksys_read
+               vfs_read
+               ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               |          
+                --1.85%--copy_page_to_iter
+                          rep_movs_alternative
+
+     2.19%     0.00%             0  vmaf     libc.so.6          [.] read
+            |
+            ---read
+               entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               __x64_sys_read
+               ksys_read
+               vfs_read
+               ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               |          
+                --1.85%--copy_page_to_iter
+                          rep_movs_alternative
+
+     2.19%     0.17%             1  vmaf     [kernel.kallsyms]  [k] filemap_read
+            |          
+             --2.02%--filemap_read
+                       |          
+                        --1.85%--copy_page_to_iter
+                                  rep_movs_alternative
+
+     2.19%     0.00%             0  vmaf     [kernel.kallsyms]  [k] __x64_sys_read
+            |
+            ---__x64_sys_read
+               ksys_read
+               vfs_read
+               ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               |          
+                --1.85%--copy_page_to_iter
+                          rep_movs_alternative
+
+     2.19%     0.00%             0  vmaf     [kernel.kallsyms]  [k] ksys_read
+            |
+            ---ksys_read
+               vfs_read
+               ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               |          
+                --1.85%--copy_page_to_iter
+                          rep_movs_alternative
+
+     2.19%     0.00%             0  vmaf     [kernel.kallsyms]  [k] vfs_read
+            |
+            ---vfs_read
+               ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               |          
+                --1.85%--copy_page_to_iter
+                          rep_movs_alternative
+
+     2.19%     0.00%             0  vmaf     [kernel.kallsyms]  [k] ext4_file_read_iter
+            |
+            ---ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               |          
+                --1.85%--copy_page_to_iter
+                          rep_movs_alternative
+
+     2.19%     0.00%             0  vmaf     [kernel.kallsyms]  [k] generic_file_read_iter
+            |
+            ---generic_file_read_iter
+               filemap_read
+               |          
+                --1.85%--copy_page_to_iter
+                          rep_movs_alternative
+
+     2.02%     2.02%            12  vmaf     vmaf               [.] adm_cm_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_cm_avx2
+
+     1.85%     1.85%            11  vmaf     [kernel.kallsyms]  [k] rep_movs_alternative
+            |
+            ---0
+               read
+               entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               __x64_sys_read
+               ksys_read
+               vfs_read
+               ext4_file_read_iter
+               generic_file_read_iter
+               filemap_read
+               copy_page_to_iter
+               rep_movs_alternative
+
+     1.85%     0.00%             0  vmaf     [kernel.kallsyms]  [k] copy_page_to_iter
+            |
+            ---copy_page_to_iter
+               rep_movs_alternative
+
+     1.52%     1.35%             8  vmaf     vmaf               [.] i4_adm_csf_avx2
+            |          
+             --1.35%--0x7ffff7894ac3
+                       vmaf_thread_pool_runner
+                       threaded_extract_func
+                       vmaf_feature_extractor_context_extract
+                       extract
+                       integer_compute_adm
+                       i4_adm_csf_avx2
+
+     1.52%     0.00%             0  vmaf     vmaf               [.] fetch_picture
+            |
+            ---fetch_picture
+               |          
+               |--0.51%--0x7ffff79a10c9
+               |          |          
+               |           --0.34%--asm_exc_page_fault
+               |                     exc_page_fault
+               |                     do_user_addr_fault
+               |                     handle_mm_fault
+               |                     __handle_mm_fault
+               |                     handle_pte_fault
+               |                     do_anonymous_page
+               |          
+               |--0.51%--0x7ffff79a10c4
+               |          
+                --0.34%--0x7ffff79a10ce
+
+     1.18%     1.18%             7  vmaf     vmaf               [.] y_convolution_8_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               y_convolution_8_avx2
+
+     1.01%     1.01%             6  vmaf     vmaf               [.] adm_csf_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_csf_avx2
+
+     1.01%     1.01%             6  vmaf     vmaf               [.] sad_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               sad_avx2_wrapper
+               sad_avx2
+
+     1.01%     1.01%             6  vmaf     vmaf               [.] vif_subsample_rd_16_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               vif_subsample_rd_16_avx2
+
+     1.01%     0.00%             0  vmaf     vmaf               [.] sad_avx2_wrapper
+            |
+            ---sad_avx2_wrapper
+               sad_avx2
+
+     0.84%     0.84%             5  vmaf     vmaf               [.] adm_dwt2_s123_combined_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_dwt2_s123_combined_avx2
+
+     0.84%     0.00%             0  vmaf     [kernel.kallsyms]  [k] asm_exc_page_fault
+            |
+            ---asm_exc_page_fault
+               exc_page_fault
+               do_user_addr_fault
+               handle_mm_fault
+               __handle_mm_fault
+               |          
+               |--0.51%--handle_pte_fault
+               |          do_anonymous_page
+               |          
+                --0.34%--do_huge_pmd_anonymous_page
+                          vma_alloc_folio
+                          alloc_pages_mpol
+                          __alloc_pages
+                          get_page_from_freelist
+                          clear_page_rep
+
+     0.84%     0.00%             0  vmaf     [kernel.kallsyms]  [k] exc_page_fault
+            |
+            ---exc_page_fault
+               do_user_addr_fault
+               handle_mm_fault
+               __handle_mm_fault
+               |          
+               |--0.51%--handle_pte_fault
+               |          do_anonymous_page
+               |          
+                --0.34%--do_huge_pmd_anonymous_page
+                          vma_alloc_folio
+                          alloc_pages_mpol
+                          __alloc_pages
+                          get_page_from_freelist
+                          clear_page_rep
+
+     0.84%     0.00%             0  vmaf     [kernel.kallsyms]  [k] do_user_addr_fault
+            |
+            ---do_user_addr_fault
+               handle_mm_fault
+               __handle_mm_fault
+               |          
+               |--0.51%--handle_pte_fault
+               |          do_anonymous_page
+               |          
+                --0.34%--do_huge_pmd_anonymous_page
+                          vma_alloc_folio
+                          alloc_pages_mpol
+                          __alloc_pages
+                          get_page_from_freelist
+                          clear_page_rep
+
+     0.84%     0.00%             0  vmaf     [kernel.kallsyms]  [k] handle_mm_fault
+            |
+            ---handle_mm_fault
+               __handle_mm_fault
+               |          
+               |--0.51%--handle_pte_fault
+               |          do_anonymous_page
+               |          
+                --0.34%--do_huge_pmd_anonymous_page
+                          vma_alloc_folio
+                          alloc_pages_mpol
+                          __alloc_pages
+                          get_page_from_freelist
+                          clear_page_rep
+
+     0.84%     0.00%             0  vmaf     [kernel.kallsyms]  [k] __handle_mm_fault
+            |
+            ---__handle_mm_fault
+               |          
+               |--0.51%--handle_pte_fault
+               |          do_anonymous_page
+               |          
+                --0.34%--do_huge_pmd_anonymous_page
+                          vma_alloc_folio
+                          alloc_pages_mpol
+                          __alloc_pages
+                          get_page_from_freelist
+                          clear_page_rep
+
+     0.67%     0.67%             4  vmaf     vmaf               [.] i4_adm_cm_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               i4_adm_cm_avx2
+
+     0.67%     0.67%             4  vmaf     vmaf               [.] x_convolution_16_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               x_convolution_16_avx2
+
+     0.51%     0.51%             3  vmaf     [kernel.kallsyms]  [k] clear_page_rep
+            |          
+             --0.34%--0x7ffff7894ac3
+                       vmaf_thread_pool_runner
+                       threaded_extract_func
+                       vmaf_feature_extractor_context_extract
+                       extract
+                       integer_compute_adm
+
+     0.51%     0.51%             3  vmaf     vmaf               [.] adm_csf_den_s123_avx2
+            |
+            ---0x7ffff7894ac3
+               vmaf_thread_pool_runner
+               threaded_extract_func
+               vmaf_feature_extractor_context_extract
+               extract
+               integer_compute_adm
+               adm_csf_den_s123_avx2
+
+     0.51%     0.00%             0  vmaf     [kernel.kallsyms]  [k] alloc_pages_mpol
+            |
+            ---alloc_pages_mpol
+               __alloc_pages
+               get_page_from_freelist
+               clear_page_rep
+
+     0.51%     0.00%             0  vmaf     [kernel.kallsyms]  [k] __alloc_pages
+            |
+            ---__alloc_pages
+               get_page_from_freelist
+               clear_page_rep
+
+     0.51%     0.00%             0  vmaf     [kernel.kallsyms]  [k] get_page_from_freelist
+            |
+            ---get_page_from_freelist
+               clear_page_rep
+
+     0.51%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a10c9
+            |
+            ---0x7ffff79a10c9
+               |          
+                --0.34%--asm_exc_page_fault
+                          exc_page_fault
+                          do_user_addr_fault
+                          handle_mm_fault
+                          __handle_mm_fault
+                          handle_pte_fault
+                          do_anonymous_page
+
+     0.51%     0.00%             0  vmaf     [kernel.kallsyms]  [k] handle_pte_fault
+            |
+            ---handle_pte_fault
+               do_anonymous_page
+
+     0.51%     0.00%             0  vmaf     [kernel.kallsyms]  [k] do_anonymous_page
+            |
+            ---do_anonymous_page
+
+     0.51%     0.51%             3  vmaf     libc.so.6          [.] 0x00000000001a0a24
+            |          
+             --0.34%--0x7ffff7829d90
+                       main
+                       0x7ffff79a0a24
+
+     0.51%     0.51%             3  vmaf     libc.so.6          [.] 0x00000000001a10c4
+            |
+            ---0x7ffff7829d90
+               main
+               fetch_picture
+               0x7ffff79a10c4
+
+     0.51%     0.00%             0  vmaf     [kernel.kallsyms]  [k] vma_alloc_folio
+            |
+            ---vma_alloc_folio
+               alloc_pages_mpol
+               __alloc_pages
+               get_page_from_freelist
+               clear_page_rep
+
+     0.51%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a0a24
+            |
+            ---0x7ffff79a0a24
+
+     0.51%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a10c4
+            |
+            ---0x7ffff79a10c4
+
+     0.34%     0.34%             2  vmaf     libc.so.6          [.] 0x00000000001a0a2e
+     0.34%     0.34%             2  vmaf     libc.so.6          [.] 0x00000000001a10ce
+            |
+            ---0x7ffff7829d90
+               main
+               fetch_picture
+               0x7ffff79a10ce
+
+     0.34%     0.34%             2  vmaf     libc.so.6          [.] 0x00000000001a09f1
+            |
+            ---0x7ffff7829d90
+               main
+               0x7ffff79a09f1
+
+     0.34%     0.00%             0  vmaf     [kernel.kallsyms]  [k] do_huge_pmd_anonymous_page
+            |
+            ---do_huge_pmd_anonymous_page
+               vma_alloc_folio
+               alloc_pages_mpol
+               __alloc_pages
+               get_page_from_freelist
+               clear_page_rep
+
+     0.34%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a09f1
+            |
+            ---0x7ffff79a09f1
+
+     0.34%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a0a2e
+            |
+            ---0x7ffff79a0a2e
+
+     0.34%     0.00%             0  vmaf     libc.so.6          [.] 0x00007ffff79a10ce
+            |
+            ---0x7ffff79a10ce
+
+
+
+#
+# (Cannot load tips.txt file, please install perf!)
+#

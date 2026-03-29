@@ -1,0 +1,9 @@
+
+ Performance counter stats for 'taskset -c 2,3,4,5 numactl --cpunodebind=0 --membind=0 /opt/vmaf/libvmaf/build/tools/vmaf --reference /opt/vmaf/testdata/bench_ref_1920x1080.yuv --distorted /opt/vmaf/testdata/bench_dis_1920x1080.yuv --width 1920 --height 1080 --pixel_format 420 --bitdepth 8 --model version=vmaf_v0.6.1 --threads 4 --output /dev/null' (5 runs):
+
+          5,597.33 msec task-clock                       #    4.116 CPUs utilized               ( +-  0.23% )
+               170      context-switches                 #   30.372 /sec                        ( +-  2.36% )
+            34,522      page-faults                      #    6.168 K/sec                       ( +-  4.09% )
+
+           1.35989 +- 0.00342 seconds time elapsed  ( +-  0.25% )
+
