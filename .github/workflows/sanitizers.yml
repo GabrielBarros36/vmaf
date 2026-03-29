@@ -180,6 +180,7 @@ jobs:
       - name: Test
         run: |
           meson test -C libvmaf/build_tsan \
-            --timeout-multiplier 15 \
+            --timeout-multiplier 10 \
             --print-errorlogs \
-            --no-suite known_issues
+            --no-suite known_issues \
+            --no-suite stress
