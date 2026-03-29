@@ -43,7 +43,7 @@ jobs:
           pip install meson
 
       - name: Install dependencies (ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo -E apt-get -yq install ccache ninja-build libomp-dev
@@ -77,13 +77,13 @@ jobs:
           sudo ninja -vC libvmaf/build install
       - name: Run tests
         run: |
-          sudo meson test -C libvmaf/build --no-rebuild --no-suite known_issues
+          sudo env PATH=$PATH meson test -C libvmaf/build --no-rebuild --no-suite known_issues
       - name: Set up tox
         run: |
           mkdir -p ~/.ccache && sudo chown -R $(whoami) ~/.ccache
           pip install tox
       - name: Run tox tests (ubuntu)
-        if: matrix.os == 'ubuntu-latest'
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           tox -c python
       - name: Run tox tests (mac)

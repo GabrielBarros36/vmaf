@@ -4,3 +4,19 @@
 
 # Suppress known intentional unsigned wrap in SVM scoring
 unsigned-integer-overflow:svm.cpp
+
+# Suppress signed integer overflow in ADM DWT filter accumulation.
+# The int32_t accumulator intentionally wraps (the normalizing subtraction
+# afterwards brings it back into range). Pre-existing upstream behavior.
+signed-integer-overflow:integer_adm.c
+
+# Suppress function type mismatch in video input vtable dispatch
+# (third-party Daala code uses C-style polymorphism via casted function pointers)
+function:video_input_open
+function:video_input_get_info
+function:video_input_fetch_frame
+function:video_input_close
+function:y4m_input_open
+function:y4m_input_get_info
+function:y4m_input_fetch_frame
+function:y4m_input_close

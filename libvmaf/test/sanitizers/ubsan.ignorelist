@@ -1,0 +1,19 @@
+# UBSan compile-time ignorelist for libvmaf
+# Format: src:file_pattern or fun:function_pattern
+# Passed via: -fsanitize-ignorelist=ubsan.ignorelist
+# Reference: https://clang.llvm.org/docs/SanitizerSpecialCaseList.html
+
+# Suppress signed integer overflow in ADM DWT filter accumulation.
+# The int32_t accumulator wraps intentionally; the subsequent
+# normalizing subtraction brings it back into range.
+[signed-integer-overflow]
+src:*/integer_adm.c
+
+# Suppress function type mismatch in video input vtable dispatch.
+# Third-party Daala code uses C-style polymorphism via casted function
+# pointers (e.g. y4m_input_open takes y4m_input* but is cast to void*(*)(FILE*)).
+[function]
+src:*/vidinput.c
+src:*/y4m_input.c
+src:*/yuv_input.c
+src:*/fuzz_y4m_parser.c

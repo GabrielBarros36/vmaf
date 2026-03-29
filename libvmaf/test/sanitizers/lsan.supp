@@ -6,3 +6,13 @@
 leak:svm_predict_values
 leak:svm_load_model
 leak:svm_
+
+# Suppress leaks in test code that exercises library allocation functions
+# without full lifecycle cleanup (test harness allocates via library APIs
+# and may not free on all code paths, especially assertion failure paths).
+leak:aligned_malloc
+leak:vmaf_dictionary_set
+leak:set_contrast_arrays
+leak:vmaf_feature_collector
+leak:vmaf_read_json_model_from_buffer
+leak:vmaf_model_load

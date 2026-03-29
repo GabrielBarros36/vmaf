@@ -58,7 +58,7 @@ jobs:
       CC: clang
       CXX: clang++
       UBSAN_OPTIONS: >-
-        halt_on_error=1:print_stacktrace=1:suppressions=${{ github.workspace }}/libvmaf/test/sanitizers/ubsan.supp
+        halt_on_error=1:abort_on_error=1:print_stacktrace=1:print_summary=1:suppressions=${{ github.workspace }}/libvmaf/test/sanitizers/ubsan.supp
     steps:
       - name: Setup python
         uses: actions/setup-python@v6
@@ -81,8 +81,8 @@ jobs:
             -Denable_float=true \
             -Db_sanitize=undefined \
             -Db_lundef=false \
-            -Dc_args="-fno-sanitize-recover=all" \
-            -Dcpp_args="-fno-sanitize-recover=all"
+            -Dc_args="-fno-sanitize-recover=all -fsanitize-ignorelist=${{ github.workspace }}/libvmaf/test/sanitizers/ubsan.ignorelist" \
+            -Dcpp_args="-fno-sanitize-recover=all -fsanitize-ignorelist=${{ github.workspace }}/libvmaf/test/sanitizers/ubsan.ignorelist"
 
       - name: Build
         run: ninja -vC libvmaf/build_ubsan
@@ -124,7 +124,9 @@ jobs:
             -Denable_float=true \
             -Denable_asm=false \
             -Db_sanitize=memory \
-            -Db_lundef=false
+            -Db_lundef=false \
+            -Dc_args="-fsanitize-ignorelist=${{ github.workspace }}/libvmaf/test/sanitizers/msan.ignorelist" \
+            -Dcpp_args="-fsanitize-ignorelist=${{ github.workspace }}/libvmaf/test/sanitizers/msan.ignorelist"
 
       - name: Build
         run: ninja -vC libvmaf/build_msan

@@ -124,6 +124,13 @@ if HAS_HYPOTHESIS:
 
     pixel_value_8bit = st.integers(min_value=0, max_value=255)
     pixel_value_10bit = st.integers(min_value=0, max_value=1023)
+else:
+    # Dummy values so that @given decorators don't raise NameError at import time.
+    # The pytestmark skipif above will prevent these tests from actually running.
+    valid_dimensions = None
+    valid_bpc = None
+    pixel_value_8bit = None
+    pixel_value_10bit = None
 
 
 # ---- P1: VMAF(ref, ref) == 100.0 ----

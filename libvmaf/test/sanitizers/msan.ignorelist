@@ -1,8 +1,21 @@
 # MSan ignorelist for libvmaf
 # Format: src:file_pattern or fun:function_pattern
-# Passed via: -fsanitize-blacklist=msan.ignorelist
+# Passed via: -fsanitize-ignorelist=msan.ignorelist
 # Reference: https://clang.llvm.org/docs/SanitizerSpecialCaseList.html
 
 # Ignore uninstrumented NASM assembly output buffers
 src:*/x86/*.asm
 fun:cpuid
+
+# Suppress false positive in third-party libsvm SVM model parser.
+# The SVMModelParserBufferSource::read_next function triggers MSan
+# use-of-uninitialized-value due to std::string internal buffer
+# handling that MSan cannot track across the C/C++ boundary.
+src:*/svm.cpp
+
+# Suppress MSan false positives in Y4M/YUV video input parsing.
+# These tools use file I/O patterns (fread/fgets into stack buffers)
+# that MSan cannot fully track through uninstrumented libc.
+src:*/y4m_input.c
+src:*/yuv_input.c
+src:*/vidinput.c

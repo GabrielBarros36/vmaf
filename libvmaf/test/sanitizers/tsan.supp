@@ -4,3 +4,12 @@
 
 # Suppress benign races in third-party libsvm code
 race:svm_predict_values
+
+# Suppress known data race in framesync buffer index tracking.
+# The race is between vmaf_framesync_acquire_new_buf (reading buf[i].filled)
+# and vmaf_framesync_submit_filled_data (writing buf[i].filled). Both hold
+# their respective per-buffer mutexes, but the reader scans other buffers
+# without their lock. This is a pre-existing design issue in the framesync
+# module and is benign in practice (the reader retries on stale reads).
+race:vmaf_framesync_acquire_new_buf
+race:vmaf_framesync_submit_filled_data

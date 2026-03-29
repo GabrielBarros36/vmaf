@@ -49,6 +49,8 @@ jobs:
               -Denable_tests=false \
               -Db_sanitize=address,undefined \
               -Db_lundef=false \
+              -Dc_args="-fsanitize-ignorelist=${{ github.workspace }}/libvmaf/test/sanitizers/ubsan.ignorelist" \
+              -Dcpp_args="-fsanitize-ignorelist=${{ github.workspace }}/libvmaf/test/sanitizers/ubsan.ignorelist" \
               --default-library=static
           ninja -C build_fuzz
 
