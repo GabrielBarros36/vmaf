@@ -15,4 +15,10 @@ leak:vmaf_dictionary_set
 leak:set_contrast_arrays
 leak:vmaf_feature_collector
 leak:vmaf_read_json_model_from_buffer
+leak:vmaf_read_json_model
+leak:vmaf_read_json_model_collection_from_path
+leak:vmaf_read_json_model_collection_from_buffer
 leak:vmaf_model_load
+leak:vmaf_model_collection_load
+leak:vmaf_model_generate_name
+leak:model_collection_parse

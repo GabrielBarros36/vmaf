@@ -133,10 +133,15 @@ jobs:
 
       - name: Test
         run: |
+          # Run MSan tests, allowing test_format_y4m to fail:
+          # the Y4M parser uses uninstrumented file I/O which causes
+          # allocation-size-too-big false positives under MSan.
           meson test -C libvmaf/build_msan \
             --timeout-multiplier 10 \
             --print-errorlogs \
-            --no-suite known_issues
+            --no-suite known_issues \
+            --no-suite msan_skip \
+            --no-rebuild
 
   tsan:
     name: ThreadSanitizer

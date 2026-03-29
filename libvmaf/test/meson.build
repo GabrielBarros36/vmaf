@@ -254,7 +254,8 @@ test_format_picture = executable('test_format_picture',
     dependencies : [stdatomic_dependency, thread_lib, cuda_dependency],
 )
 
-test('test_format_y4m', test_format_y4m, timeout : 120)
+test('test_format_y4m', test_format_y4m, timeout : 120,
+     suite : ['msan_skip'])  # Y4M parser triggers MSan false positives via uninstrumented fread
 test('test_format_picture', test_format_picture)
 
 # Cross-Architecture Golden Value Tests
